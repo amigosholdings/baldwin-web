@@ -1,7 +1,5 @@
 -- 100 publicly listed Baldwin provider contacts generated from outreach-100-verified-emails.csv.
 -- Upsert by email; preserves operator stage when a row already exists.
-BEGIN TRANSACTION;
-
 UPDATE outreach SET
   website='https://njfue.com/',
   email='info@njfue.com',
@@ -1602,4 +1600,3 @@ INSERT INTO outreach (id, practice_name, website, email, city, category, priorit
 SELECT lower(hex(randomblob(16))), 'Dallas Men''s Health', 'https://www.dallasmenshealth.com/services/hair-restoration-treatments', 'Info@DallasMensHealth.com', 'Dallas, TX', 'hair restoration', 3, 'https://www.dallasmenshealth.com/services/hair-restoration-treatments', 'official', 'identified', 'Public professional/business contact address; verify again immediately before sending if campaign is delayed.'
 WHERE NOT EXISTS (SELECT 1 FROM outreach WHERE lower(email)=lower('Info@DallasMensHealth.com') OR lower(practice_name)=lower('Dallas Men''s Health'));
 
-COMMIT;

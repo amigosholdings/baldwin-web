@@ -1,0 +1,16 @@
+/ops/*
+  Cache-Control: no-store
+  X-Robots-Tag: noindex, nofollow
+  Referrer-Policy: no-referrer
+
+/provider-kit/*
+  X-Robots-Tag: noindex, nofollow
+  Referrer-Policy: strict-origin-when-cross-origin
+
+/start/*
+  Cache-Control: no-store
+  X-Robots-Tag: noindex, follow
+  Referrer-Policy: strict-origin-when-cross-origin
+
+/*
+  X-Content-Type-Options: nosniff

@@ -6,8 +6,8 @@ Monorepo for Baldwin's public growth/acquisition web stack.
 
 | Directory | Cloudflare target | Production surface |
 |---|---|---|
-| `trackmyhairloss-pages/` | Pages project | `trackmyhairloss.com` |
-| `trybaldwin-pages/` | Pages project | `trybaldwin.app` |
+| `trackmyhairloss-pages/` | Pages project | `trackmyhairloss.com` (tools, provider acquisition, provider kit, ops) |
+| `trybaldwin-pages/` | Pages project | `trybaldwin.app` patient referral landing |
 | `content-worker/` | Worker `trackmyhairloss-content` | Dynamic `/blog`, `/compare`, `/treatments`, sitemap/feed/llms routes |
 | `worker/` | Worker `baldwin-growth-api` | Growth/referral/event API |
 
@@ -29,9 +29,9 @@ Create a new Git-connected Pages project (the old Direct Upload project cannot b
 
 Test its `*.pages.dev` URL, then move `trackmyhairloss.com` from the old Direct Upload project to the new Git-connected project.
 
-### TryBaldwin Pages
+### Legacy TryBaldwin Pages (optional)
 
-Create a second Git-connected Pages project from the same repo:
+The current experiment does not require this surface. If you already operate it and want to keep it deployed:
 
 - Production branch: `main`
 - Root directory: `trybaldwin-pages`
@@ -68,6 +68,15 @@ On the existing `baldwin-growth-api` Worker:
 - Deploy command: `npx wrangler deploy`
 
 `ADMIN_TOKEN` remains stored as a Cloudflare Worker secret.
+
+## Distribution surfaces
+
+- `https://trackmyhairloss.com/providers/` — provider pilot landing + lead capture
+- `https://trybaldwin.app/?ref=CODE` — attributed patient referral landing
+- `https://trackmyhairloss.com/provider-kit/?ref=CODE` — printable referral card/QR kit
+- `https://trackmyhairloss.com/ops/` — admin-token growth dashboard
+
+See `TONIGHT.md` for the launch sequence.
 
 ## Database migrations
 

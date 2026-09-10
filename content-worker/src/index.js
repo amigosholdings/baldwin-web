@@ -911,7 +911,7 @@ async function feedXml(env) {
 async function sitemap(env) {
   const rows = (await env.DB.prepare("SELECT slug,content_type,published_at,updated_at FROM content_pages WHERE status='published' ORDER BY published_at DESC").all()).results || [];
   const base = baseUrl(env);
-  const staticUrls = ['/', '/comparator/','/photo-audit/','/contact-sheet/','/framing-grid/','/check-in-log/','/photo-guide/','/timeline/','/blog','/compare','/treatments'];
+  const staticUrls = ['/', '/comparator/','/photo-audit/','/contact-sheet/','/framing-grid/','/check-in-log/','/photo-guide/','/timeline/','/providers/','/blog','/compare','/treatments'];
   const urls = staticUrls.map(path=>({loc:`${base}${path}`,lastmod:null})).concat(rows.map(p=>({loc:`${base}${contentPath(p)}`,lastmod:p.updated_at||p.published_at})));
   const xml = `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map(u=>`<url><loc>${esc(u.loc)}</loc>${u.lastmod?`<lastmod>${esc(new Date(u.lastmod).toISOString())}</lastmod>`:''}</url>`).join('')}</urlset>`;
   return new Response(xml,{headers:{'content-type':'application/xml;charset=utf-8','cache-control':'public, max-age=300'}});
