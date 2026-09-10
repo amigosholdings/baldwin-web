@@ -12,7 +12,8 @@ const EVENT_NAMES = new Set([
   'blog_cta_click'
 ]);
 
-const STAGES = new Set(['identified','contacted','responded','demo','pilot','active','lost']);
+const STAGES = new Set(['new','identified','contacted','responded','demo','pilot','active','lost']);
+const PROVIDER_STATUSES = new Set(['pilot','active','paused','lost']);
 
 function uuid() {
   return crypto.randomUUID();
@@ -94,6 +95,7 @@ async function dashboard(env) {
         p.id, p.code, p.name, p.website, p.city, p.state, p.status, p.created_at,
         SUM(CASE WHEN e.event_name='referral_view' THEN 1 ELSE 0 END) AS referral_views,
         SUM(CASE WHEN e.event_name='download_click' THEN 1 ELSE 0 END) AS download_clicks,
+        COUNT(DISTINCT CASE WHEN e.event_name='tool_used' THEN COALESCE(e.user_id,e.anonymous_id,e.id) END) AS tool_activations,
         COUNT(DISTINCT CASE WHEN e.event_name='app_signup' THEN COALESCE(e.user_id,e.anonymous_id,e.id) END) AS app_signups,
         COUNT(DISTINCT CASE WHEN e.event_name='baseline_complete' THEN COALESCE(e.user_id,e.anonymous_id,e.id) END) AS baselines,
         COUNT(DISTINCT CASE WHEN e.event_name='second_session' THEN COALESCE(e.user_id,e.anonymous_id,e.id) END) AS second_sessions,
@@ -120,6 +122,7 @@ async function dashboard(env) {
           WHEN 'active' THEN 5
           ELSE 6
         END,
+        COALESCE(priority, 9) ASC,
         created_at DESC
       LIMIT 1000
     `).all()
@@ -187,10 +190,15 @@ export default {
       if (!body?.practice_name || !body?.email) {
         return json(request, env, { error: 'practice_name_and_email_required' }, 400);
       }
+      if (body.company_site) return json(request, env, { ok: true }, 201);
       const email = String(body.email).trim().slice(0, 180);
       if (!/^\S+@\S+\.\S+$/.test(email)) {
         return json(request, env, { error: 'invalid_email' }, 400);
       }
+      const duplicate = await env.DB.prepare(
+        `SELECT id FROM provider_leads WHERE lower(email)=lower(?) AND created_at >= datetime('now','-1 day') LIMIT 1`
+      ).bind(email).first();
+      if (duplicate) return json(request, env, { ok: true, duplicate: true }, 200);
       await env.DB.prepare(`
         INSERT INTO provider_leads
           (id,practice_name,contact_name,email,phone,website,city,state,notes,stage)
@@ -255,6 +263,55 @@ export default {
         return json(request, env, { ok: true, id }, 201);
       }
 
+      const promoteMatch = path.match(/^\/v1\/admin\/outreach\/([^/]+)\/promote$/);
+      if (request.method === 'POST' && promoteMatch) {
+        const outreachId = promoteMatch[1];
+        const lead = await env.DB.prepare('SELECT * FROM outreach WHERE id=? LIMIT 1').bind(outreachId).first();
+        if (!lead) return json(request, env, { error: 'not_found' }, 404);
+
+        let existing = await env.DB.prepare(
+          'SELECT id, code, name, website, city, state, status FROM providers WHERE lower(name)=lower(?) LIMIT 1'
+        ).bind(lead.practice_name).first();
+
+        if (!existing) {
+          let code = slug(lead.practice_name);
+          if (!code) code = `provider-${Math.random().toString(36).slice(2,8)}`;
+          const collision = await env.DB.prepare('SELECT 1 FROM providers WHERE code=?').bind(code).first();
+          if (collision) code = `${code}-${Math.random().toString(36).slice(2,6)}`;
+          const id = uuid();
+          await env.DB.prepare(`
+            INSERT INTO providers (id,code,name,website,city,email,status)
+            VALUES (?,?,?,?,?,?,'pilot')
+          `).bind(
+            id, code, lead.practice_name, lead.website || '', lead.city || '', lead.email || ''
+          ).run();
+          existing = { id, code, name: lead.practice_name, website: lead.website || '', city: lead.city || '', state: '', status: 'pilot' };
+        }
+
+        await env.DB.prepare(
+          `UPDATE outreach SET stage='pilot', updated_at=CURRENT_TIMESTAMP WHERE id=?`
+        ).bind(outreachId).run();
+
+        return json(request, env, {
+          ok: true,
+          provider: {
+            ...existing,
+            referral_url: `https://trybaldwin.app/?ref=${encodeURIComponent(existing.code)}`,
+            kit_url: `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(existing.code)}`
+          }
+        });
+      }
+
+      const providerStatusMatch = path.match(/^\/v1\/admin\/providers\/([^/]+)\/status$/);
+      if (request.method === 'PATCH' && providerStatusMatch) {
+        const body = await bodyJson(request);
+        const status = String(body?.status || '');
+        if (!PROVIDER_STATUSES.has(status)) return json(request, env, { error: 'invalid_status' }, 400);
+        const result = await env.DB.prepare('UPDATE providers SET status=? WHERE id=?').bind(status, providerStatusMatch[1]).run();
+        if (!result.meta?.changes) return json(request, env, { error: 'not_found' }, 404);
+        return json(request, env, { ok: true });
+      }
+
       const stageMatch = path.match(/^\/v1\/admin\/(leads|outreach)\/([^/]+)\/stage$/);
       if (request.method === 'PATCH' && stageMatch) {
         const [, type, id] = stageMatch;
@@ -271,10 +328,10 @@ export default {
 
       if (request.method === 'GET' && path === '/v1/admin/export.csv') {
         const data = await dashboard(env);
-        const lines = [['type','id','practice_name','email','city','state','category','stage','code','created_at']];
-        for (const x of data.providers) lines.push(['provider',x.id,x.name,'',x.city,x.state,'',x.status,x.code,x.created_at]);
-        for (const x of data.leads) lines.push(['lead',x.id,x.practice_name,x.email,x.city,x.state,'',x.stage,'',x.created_at]);
-        for (const x of data.outreach) lines.push(['outreach',x.id,x.practice_name,x.email,x.city,'',x.category,x.stage,'',x.created_at]);
+        const lines = [['type','id','practice_name','email','city','state','category','priority','stage','code','created_at']];
+        for (const x of data.providers) lines.push(['provider',x.id,x.name,'',x.city,x.state,'','',x.status,x.code,x.created_at]);
+        for (const x of data.leads) lines.push(['lead',x.id,x.practice_name,x.email,x.city,x.state,'','',x.stage,'',x.created_at]);
+        for (const x of data.outreach) lines.push(['outreach',x.id,x.practice_name,x.email,x.city,'',x.category,x.priority,x.stage,'',x.created_at]);
         const csv = lines.map(row => row.map(csvEscape).join(',')).join('\n');
         return text(request, env, csv, 200, 'text/csv; charset=utf-8');
       }

@@ -54,6 +54,9 @@ CREATE TABLE IF NOT EXISTS outreach (
   phone TEXT,
   city TEXT,
   category TEXT,
+  priority INTEGER,
+  source_url TEXT,
+  source_type TEXT,
   stage TEXT NOT NULL DEFAULT 'identified',
   last_contacted_at TEXT,
   next_action_at TEXT,
@@ -62,3 +65,4 @@ CREATE TABLE IF NOT EXISTS outreach (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_outreach_stage ON outreach(stage);
+CREATE INDEX IF NOT EXISTS idx_outreach_priority ON outreach(priority);
