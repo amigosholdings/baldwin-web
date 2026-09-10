@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# Discovery
+Sitemap: https://trackmyhairloss.com/sitemap.xml

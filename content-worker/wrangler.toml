@@ -1,0 +1,56 @@
+name = "trackmyhairloss-content"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+preview_urls = false
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "baldwin-growth"
+database_id = "48fcce74-b672-40aa-8080-9a04021cd5b9"
+
+[vars]
+AUTO_PUBLISH_STANDARD = "true"
+AUTO_PUBLISH_MEDICAL = "false"
+SITE_URL = "https://trackmyhairloss.com"
+NCBI_TOOL = "trackmyhairloss"
+NCBI_EMAIL = "threeamigosholdings@gmail.com"
+SEO_AUTOPILOT = "true"
+SEO_REFRESH_MEDICAL = "false"
+GSC_SITE_URL = "sc-domain:trackmyhairloss.com"
+GSC_LOOKBACK_DAYS = "28"
+GSC_DATA_LAG_DAYS = "3"
+
+[triggers]
+crons = ["17 13 * * *"]
+
+[[routes]]
+pattern = "trackmyhairloss.com/blog*"
+zone_name = "trackmyhairloss.com"
+
+[[routes]]
+pattern = "trackmyhairloss.com/compare*"
+zone_name = "trackmyhairloss.com"
+
+[[routes]]
+pattern = "trackmyhairloss.com/treatments*"
+zone_name = "trackmyhairloss.com"
+
+[[routes]]
+pattern = "trackmyhairloss.com/sitemap.xml"
+zone_name = "trackmyhairloss.com"
+
+[[routes]]
+pattern = "trackmyhairloss.com/llms.txt"
+zone_name = "trackmyhairloss.com"
+
+[[routes]]
+pattern = "trackmyhairloss.com/indexnow-key.txt"
+zone_name = "trackmyhairloss.com"
+
+[[routes]]
+pattern = "trackmyhairloss.com/feed.xml"
+zone_name = "trackmyhairloss.com"

@@ -1,0 +1,17 @@
+{
+  "name": "trackmyhairloss-content",
+  "private": true,
+  "version": "4.0.0",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "migrate": "wrangler d1 execute baldwin-growth --remote --file=./migration-v2.sql",
+    "seed": "wrangler d1 execute baldwin-growth --remote --file=./seed.sql",
+    "check": "node --check src/index.js",
+    "migrate:v4": "wrangler d1 execute baldwin-growth --remote --file=./migration-v3.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4.130.0"
+  }
+}

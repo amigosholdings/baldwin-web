@@ -1,0 +1,17 @@
+{
+  "name": "baldwin-growth-api",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create baldwin-growth",
+    "db:migrate:local": "wrangler d1 execute baldwin-growth --local --file=./schema.sql",
+    "db:migrate:remote": "wrangler d1 execute baldwin-growth --remote --file=./schema.sql",
+    "db:seed:outreach": "wrangler d1 execute baldwin-growth --remote --file=./seed-outreach.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4.33.1"
+  }
+}

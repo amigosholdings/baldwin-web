@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# Cloudflare local state
+.wrangler/
+.dev.vars
+
+# local environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*service-account*.json
+*credentials*.json
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# logs / temp
+*.log
+.tmp/
+tmp/
