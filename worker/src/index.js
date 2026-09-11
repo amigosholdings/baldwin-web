@@ -1,16 +1,6 @@
-const EVENT_NAMES = new Set([
-  'referral_view',
-  'download_click',
-  'app_signup',
-  'baseline_complete',
-  'second_session',
-  'subscription_started',
-  'tool_used',
-  'tool_open',
-  'tool_cta_click',
-  'blog_view',
-  'blog_cta_click'
-]);
+import { GROWTH_EVENT_NAMES, activeProvider, recordGrowthEvent, upsertProviderOffer } from './growth.js';
+import { appleOfferConfigured, provisionProviderOffer } from './appleOffers.js';
+const EVENT_NAMES = GROWTH_EVENT_NAMES;
 
 const STAGES = new Set(['new','identified','contacted','responded','demo','pilot','active','lost']);
 const PROVIDER_STATUSES = new Set(['pilot','active','paused','lost']);
@@ -56,6 +46,12 @@ function isAdmin(request, env) {
   return Boolean(env.ADMIN_TOKEN) && token === env.ADMIN_TOKEN;
 }
 async function bodyJson(request) { try { return await request.json(); } catch { return null; } }
+function scheduleProviderOffer(ctx, env, code) {
+  if (!ctx || !appleOfferConfigured(env) || !code) return;
+  ctx.waitUntil(provisionProviderOffer(env, code).then(result => {
+    if (!result.ok && result.error !== 'offer_provision_in_progress') console.warn('provider offer provisioning failed', code, result.error);
+  }).catch(error => console.warn('provider offer provisioning failed', code, clean(error?.message, 300))));
+}
 
 async function contentService(env, path, { method = 'GET', body = null } = {}) {
   if (!env.CONTENT) throw new Error('CONTENT_service_binding_not_configured');
@@ -78,9 +74,14 @@ async function contentJson(env, path, opts = {}) {
 }
 
 async function providerByCode(env, rawCode) {
-  const code = slug(rawCode);
-  if (!code) return null;
-  return env.DB.prepare(`SELECT id, code, name, website, city, state, status FROM providers WHERE code = ? LIMIT 1`).bind(code).first();
+  const provider = await activeProvider(env, rawCode);
+  if (!provider) return null;
+  return {
+    id: provider.id, code: provider.code, name: provider.name, website: provider.website,
+    city: provider.city, state: provider.state, status: provider.status,
+    appleOfferCode: provider.appleOfferCode, offerVariant: provider.offerVariant,
+    offerProvisionStatus: provider.offerProvisionStatus, offerProvisionError: provider.offerProvisionError, offerProvisionedAt: provider.offerProvisionedAt
+  };
 }
 
 function openRouterModel(env) {
@@ -95,16 +96,20 @@ async function dashboard(env) {
   const [totals, providers, leads, outreach, messages] = await Promise.all([
     env.DB.prepare(`SELECT event_name, COUNT(*) AS n FROM events GROUP BY event_name ORDER BY event_name`).all(),
     env.DB.prepare(`
-      SELECT p.id, p.code, p.name, p.website, p.city, p.state, p.status, p.created_at,
+      SELECT p.id, p.code, p.name, p.website, p.city, p.state, p.status, p.apple_offer_code, p.offer_variant, p.offer_provision_status, p.offer_provision_error, p.offer_provisioned_at, p.created_at,
         SUM(CASE WHEN e.event_name='referral_view' THEN 1 ELSE 0 END) AS referral_views,
         SUM(CASE WHEN e.event_name='download_click' THEN 1 ELSE 0 END) AS download_clicks,
+        SUM(CASE WHEN e.event_name='app_store_redirect' THEN 1 ELSE 0 END) AS app_store_redirects,
+        SUM(CASE WHEN e.event_name='provider_offer_redirect' THEN 1 ELSE 0 END) AS offer_redirects,
+        COUNT(DISTINCT CASE WHEN e.event_name='attributed_install' THEN COALESCE(e.installation_id,e.anonymous_id,e.id) END) AS attributed_installs,
+        COUNT(DISTINCT CASE WHEN e.event_name='attributed_open' THEN COALESCE(e.installation_id,e.anonymous_id,e.id) END) AS attributed_opens,
         COUNT(DISTINCT CASE WHEN e.event_name='tool_used' THEN COALESCE(e.user_id,e.anonymous_id,e.id) END) AS tool_activations,
-        COUNT(DISTINCT CASE WHEN e.event_name='app_signup' THEN COALESCE(e.user_id,e.anonymous_id,e.id) END) AS app_signups,
-        COUNT(DISTINCT CASE WHEN e.event_name='baseline_complete' THEN COALESCE(e.user_id,e.anonymous_id,e.id) END) AS baselines,
-        COUNT(DISTINCT CASE WHEN e.event_name='second_session' THEN COALESCE(e.user_id,e.anonymous_id,e.id) END) AS second_sessions,
-        COUNT(DISTINCT CASE WHEN e.event_name='subscription_started' THEN COALESCE(e.user_id,e.anonymous_id,e.id) END) AS subscriptions
+        COUNT(DISTINCT CASE WHEN e.event_name='app_signup' THEN COALESCE(e.user_id,e.installation_id,e.anonymous_id,e.id) END) AS app_signups,
+        COUNT(DISTINCT CASE WHEN e.event_name='baseline_complete' THEN COALESCE(e.user_id,e.installation_id,e.anonymous_id,e.id) END) AS baselines,
+        COUNT(DISTINCT CASE WHEN e.event_name='second_session' THEN COALESCE(e.user_id,e.installation_id,e.anonymous_id,e.id) END) AS second_sessions,
+        COUNT(DISTINCT CASE WHEN e.event_name='subscription_started' THEN COALESCE(e.user_id,e.installation_id,e.anonymous_id,e.id) END) AS subscriptions
       FROM providers p LEFT JOIN events e ON e.provider_code = p.code
-      GROUP BY p.id, p.code, p.name, p.website, p.city, p.state, p.status, p.created_at
+      GROUP BY p.id, p.code, p.name, p.website, p.city, p.state, p.status, p.apple_offer_code, p.offer_variant, p.offer_provision_status, p.offer_provision_error, p.offer_provisioned_at, p.created_at
       ORDER BY p.created_at DESC
     `).all(),
     env.DB.prepare(`SELECT * FROM provider_leads ORDER BY created_at DESC LIMIT 500`).all(),
@@ -561,7 +566,7 @@ async function processResendWebhook(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: headers(request, env) });
     const url = new URL(request.url);
     const path = url.pathname;
@@ -578,11 +583,8 @@ export default {
     if (request.method === 'POST' && path === '/v1/events') {
       const body = await bodyJson(request);
       if (!body || !EVENT_NAMES.has(body.event)) return json(request, env, { error: 'invalid_event' }, 400);
-      const metadata = body.metadata && typeof body.metadata === 'object' ? JSON.stringify(body.metadata).slice(0, 4000) : null;
-      await env.DB.prepare(`INSERT INTO events (id,event_name,provider_code,anonymous_id,user_id,source,campaign,metadata_json) VALUES (?,?,?,?,?,?,?,?)`)
-        .bind(uuid(), body.event, body.providerCode ? slug(body.providerCode) : null, body.anonymousId ? clean(body.anonymousId,128) : null,
-          body.userId ? clean(body.userId,128) : null, body.source ? clean(body.source,80) : null, body.campaign ? clean(body.campaign,120) : null, metadata).run();
-      return json(request, env, { ok: true }, 201);
+      const result = await recordGrowthEvent(env, body);
+      return json(request, env, result.body, result.status);
     }
 
     if (request.method === 'POST' && path === '/v1/provider-leads') {
@@ -618,6 +620,7 @@ export default {
       `).bind(lead.email).first();
       if (duplicate) {
         const provider = await env.DB.prepare(`SELECT * FROM providers WHERE lower(email)=lower(?) OR lower(name)=lower(?) LIMIT 1`).bind(lead.email, lead.practice_name).first();
+        if (provider?.code) scheduleProviderOffer(ctx, env, provider.code);
         return json(request, env, {
           ok: true,
           duplicate: true,
@@ -635,6 +638,7 @@ export default {
       ]);
 
       const provider = await ensureProviderForLead(env, lead);
+      scheduleProviderOffer(ctx, env, provider.code);
       const outreach = await ensureOutreachForLead(env, lead);
       const copy = providerPilotCopy(lead, provider);
       let emailResult = { sent: false, suppressed: Number(outreach.do_not_contact) === 1 };
@@ -700,6 +704,27 @@ export default {
         catch (error) { return json(request, env, { ok: false, error: clean(error?.message, 500) }, 502); }
       }
 
+      if (request.method === 'POST' && path === '/v1/admin/provider-offers') {
+        const body = await bodyJson(request);
+        const result = await upsertProviderOffer(env, body || {});
+        if (result.body?.provider) {
+          const p = result.body.provider;
+          result.body.provider.referral_url = `https://trybaldwin.app/?ref=${encodeURIComponent(p.code)}`;
+          result.body.provider.download_url = `https://getbaldwin.app/download?c=provider_referral&ref=${encodeURIComponent(p.code)}&utm_source=trybaldwin&utm_campaign=provider_referral`;
+          result.body.provider.redemption_url = `https://apps.apple.com/redeem?ctx=offercodes&id=6760326527&code=${encodeURIComponent(p.appleOfferCode)}`;
+        }
+        return json(request, env, result.body, result.status);
+      }
+
+      const provisionOfferMatch = path.match(/^\/v1\/admin\/providers\/([^/]+)\/provision-offer$/);
+      if (request.method === 'POST' && provisionOfferMatch) {
+        const body = await bodyJson(request) || {};
+        const code = decodeURIComponent(provisionOfferMatch[1]);
+        const limit = Number.isInteger(Number(body.limit)) ? Number(body.limit) : 25000;
+        const result = await provisionProviderOffer(env, code, { redemptionLimit: limit });
+        return json(request, env, result, result.status || (result.ok ? 200 : 500));
+      }
+
       if (request.method === 'POST' && path === '/v1/admin/providers') {
         const body = await bodyJson(request);
         if (!body?.name) return json(request, env, { error: 'name_required' }, 400);
@@ -708,7 +733,8 @@ export default {
         const id = uuid();
         await env.DB.prepare(`INSERT INTO providers (id,code,name,website,city,state,status) VALUES (?,?,?,?,?,?,'pilot')`)
           .bind(id, code, clean(body.name,160), clean(body.website,240), clean(body.city,120), clean(body.state,80)).run();
-        return json(request, env, { ok: true, provider: { id, code, name: body.name, referral_url: `https://trybaldwin.app/?ref=${encodeURIComponent(code)}` } }, 201);
+        scheduleProviderOffer(ctx, env, code);
+        return json(request, env, { ok: true, provider: { id, code, name: body.name, referral_url: `https://trybaldwin.app/?ref=${encodeURIComponent(code)}`, offer_status: appleOfferConfigured(env) ? 'provisioning' : 'unconfigured' } }, 201);
       }
 
       if (request.method === 'POST' && path === '/v1/admin/outreach') {
@@ -789,7 +815,8 @@ export default {
           existing = { id, code, name: lead.practice_name, website: lead.website || '', city: lead.city || '', state: '', status: 'pilot' };
         }
         await env.DB.prepare(`UPDATE outreach SET stage='pilot', updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(lead.id).run();
-        return json(request, env, { ok: true, provider: { ...existing, referral_url: `https://trybaldwin.app/?ref=${encodeURIComponent(existing.code)}`, kit_url: `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(existing.code)}` } });
+        scheduleProviderOffer(ctx, env, existing.code);
+        return json(request, env, { ok: true, provider: { ...existing, referral_url: `https://trybaldwin.app/?ref=${encodeURIComponent(existing.code)}`, kit_url: `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(existing.code)}`, offer_status: appleOfferConfigured(env) ? 'provisioning' : 'unconfigured' } });
       }
 
       const replyMatch = path.match(/^\/v1\/admin\/email\/([^/]+)\/reply$/);
