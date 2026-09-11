@@ -208,6 +208,120 @@ async function sendOutreach(env, outreach, { force = false } = {}) {
   return { id: sent.id, message_id: messageId, subject: copy.subject };
 }
 
+async function hashToken(value = '') {
+  const bytes = new TextEncoder().encode(String(value));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest)).map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 32);
+}
+
+async function ensureProviderForLead(env, lead) {
+  let provider = await env.DB.prepare(`
+    SELECT * FROM providers
+    WHERE lower(email)=lower(?) OR lower(name)=lower(?)
+    ORDER BY CASE WHEN lower(email)=lower(?) THEN 0 ELSE 1 END
+    LIMIT 1
+  `).bind(lead.email, lead.practice_name, lead.email).first();
+  if (provider) {
+    await env.DB.prepare(`
+      UPDATE providers SET
+        contact_name=COALESCE(NULLIF(?,''),contact_name),
+        email=COALESCE(NULLIF(?,''),email),
+        phone=COALESCE(NULLIF(?,''),phone),
+        website=COALESCE(NULLIF(?,''),website),
+        city=COALESCE(NULLIF(?,''),city),
+        state=COALESCE(NULLIF(?,''),state),
+        status=CASE WHEN status IN ('paused','lost') THEN 'pilot' ELSE status END
+      WHERE id=?
+    `).bind(lead.contact_name, lead.email, lead.phone, lead.website, lead.city, lead.state, provider.id).run();
+    return env.DB.prepare('SELECT * FROM providers WHERE id=? LIMIT 1').bind(provider.id).first();
+  }
+
+  const base = slug(lead.practice_name) || `provider-${Math.random().toString(36).slice(2,8)}`;
+  let code = base;
+  for (let i = 0; i < 5 && await env.DB.prepare('SELECT 1 FROM providers WHERE code=?').bind(code).first(); i++) {
+    code = `${base}-${Math.random().toString(36).slice(2,6)}`;
+  }
+  const id = uuid();
+  await env.DB.prepare(`
+    INSERT INTO providers (id,code,name,website,city,state,contact_name,email,phone,status)
+    VALUES (?,?,?,?,?,?,?,?,?,'pilot')
+  `).bind(id, code, lead.practice_name, lead.website, lead.city, lead.state, lead.contact_name, lead.email, lead.phone).run();
+  return env.DB.prepare('SELECT * FROM providers WHERE id=? LIMIT 1').bind(id).first();
+}
+
+async function ensureOutreachForLead(env, lead) {
+  let outreach = await env.DB.prepare('SELECT * FROM outreach WHERE lower(email)=lower(?) ORDER BY created_at DESC LIMIT 1').bind(lead.email).first();
+  if (outreach) {
+    if (!Number(outreach.do_not_contact)) {
+      await env.DB.prepare(`
+        UPDATE outreach SET practice_name=?, website=COALESCE(NULLIF(?,''),website), city=COALESCE(NULLIF(?,''),city),
+          category='inbound provider lead', stage='pilot', source_url=COALESCE(NULLIF(?,''),source_url),
+          source_type='provider_form', notes=COALESCE(notes || char(10),'') || 'Inbound provider pilot request.', updated_at=CURRENT_TIMESTAMP
+        WHERE id=?
+      `).bind(lead.practice_name, lead.website, lead.city, lead.website, outreach.id).run();
+      outreach = await env.DB.prepare('SELECT * FROM outreach WHERE id=? LIMIT 1').bind(outreach.id).first();
+    }
+    return outreach;
+  }
+
+  const id = uuid();
+  await env.DB.prepare(`
+    INSERT INTO outreach (id,practice_name,website,email,city,category,priority,source_url,source_type,stage,notes)
+    VALUES (?,?,?,?,?,'inbound provider lead',1,?,'provider_form','pilot','Inbound provider pilot request.')
+  `).bind(id, lead.practice_name, lead.website, lead.email, lead.city, lead.website).run();
+  return env.DB.prepare('SELECT * FROM outreach WHERE id=? LIMIT 1').bind(id).first();
+}
+
+function providerPilotCopy(lead, provider) {
+  const referralUrl = `https://trybaldwin.app/?ref=${encodeURIComponent(provider.code)}`;
+  const kitUrl = `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(provider.code)}`;
+  const hello = lead.contact_name ? `Hi ${lead.contact_name},` : `Hi ${lead.practice_name} team,`;
+  const subject = 'Your Baldwin provider pilot is ready';
+  const body = `${hello}
+
+Thanks for requesting a Baldwin pilot. Your practice-specific setup is ready.
+
+Patient link:
+${referralUrl}
+
+Printable QR / patient card:
+${kitUrl}
+
+There is no clinic login or patient upload workflow. Patients scan your link, take a guided baseline, and Baldwin handles their progress tracking.
+
+If you would prefer physical cards for the front desk, reply with the best mailing address and I’ll send a small starter stack at no cost.
+
+Best,
+Shaun
+Baldwin
+https://trybaldwin.app/`;
+  return { subject, body, referralUrl, kitUrl };
+}
+
+async function sendProviderPilot(env, outreach, lead, provider) {
+  if (!env.REPLY_DOMAIN || !env.RESEND_API_KEY || !env.OUTREACH_FROM || Number(outreach.do_not_contact)) {
+    return { sent: false, suppressed: Number(outreach.do_not_contact) === 1 };
+  }
+  const copy = providerPilotCopy(lead, provider);
+  const sent = await sendResendEmail(env, {
+    outreach,
+    to: lead.email,
+    subject: copy.subject,
+    body: copy.body,
+    idempotencyKey: `baldwin-provider-pilot-${outreach.id}`
+  });
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT OR IGNORE INTO email_messages (id,outreach_id,direction,provider,provider_email_id,from_email,to_email,subject,text_body,status)
+      VALUES (?,?,'outbound','resend',?,?,?,?,?,'sent')
+    `).bind(uuid(), outreach.id, clean(sent.id,180), extractEmailAddress(env.OUTREACH_FROM), lead.email, copy.subject, copy.body),
+    env.DB.prepare(`
+      UPDATE outreach SET stage='pilot', email_status='sent', last_contacted_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?
+    `).bind(outreach.id)
+  ]);
+  return { sent: true, id: sent.id };
+}
+
 function emailBody(email = {}) {
   if (email.text) return String(email.text);
   return String(email.html || '')
@@ -475,13 +589,69 @@ export default {
       const body = await bodyJson(request);
       if (!body?.practice_name || !body?.email) return json(request, env, { error: 'practice_name_and_email_required' }, 400);
       if (body.company_site) return json(request, env, { ok: true }, 201);
-      const email = clean(body.email,180);
-      if (!/^\S+@\S+\.\S+$/.test(email)) return json(request, env, { error: 'invalid_email' }, 400);
-      const duplicate = await env.DB.prepare(`SELECT id FROM provider_leads WHERE lower(email)=lower(?) AND created_at >= datetime('now','-1 day') LIMIT 1`).bind(email).first();
-      if (duplicate) return json(request, env, { ok: true, duplicate: true }, 200);
-      await env.DB.prepare(`INSERT INTO provider_leads (id,practice_name,contact_name,email,phone,website,city,state,notes,stage) VALUES (?,?,?,?,?,?,?,?,?,'new')`)
-        .bind(uuid(), clean(body.practice_name,160), clean(body.contact_name,160), email, clean(body.phone,80), clean(body.website,240), clean(body.city,120), clean(body.state,80), clean(body.notes,1000)).run();
-      return json(request, env, { ok: true }, 201);
+
+      const lead = {
+        practice_name: clean(body.practice_name,160),
+        contact_name: clean(body.contact_name,160),
+        email: extractEmailAddress(clean(body.email,180)),
+        phone: clean(body.phone,80),
+        website: clean(body.website,240),
+        city: clean(body.city,120),
+        state: clean(body.state,80),
+        notes: clean(body.notes,1000)
+      };
+      if (!lead.email) return json(request, env, { error: 'invalid_email' }, 400);
+
+      // The public form can create a referral code and send one transactional pilot email,
+      // but it never creates clinic credentials or grants access to patient data. Throttle
+      // accepted submissions by source IP and suppress repeated email sends for 24 hours.
+      const sourceIp = clean(request.headers.get('CF-Connecting-IP') || request.headers.get('x-forwarded-for') || 'unknown', 160).split(',')[0].trim();
+      const sourceHash = await hashToken(sourceIp);
+      const recent = await env.DB.prepare(`
+        SELECT COUNT(*) AS n FROM events
+        WHERE event_name='provider_lead_submit' AND anonymous_id=? AND created_at >= datetime('now','-1 hour')
+      `).bind(sourceHash).first();
+      if (Number(recent?.n || 0) >= 5) return json(request, env, { error: 'rate_limited' }, 429);
+
+      const duplicate = await env.DB.prepare(`
+        SELECT id FROM provider_leads WHERE lower(email)=lower(?) AND created_at >= datetime('now','-1 day') LIMIT 1
+      `).bind(lead.email).first();
+      if (duplicate) {
+        const provider = await env.DB.prepare(`SELECT * FROM providers WHERE lower(email)=lower(?) OR lower(name)=lower(?) LIMIT 1`).bind(lead.email, lead.practice_name).first();
+        return json(request, env, {
+          ok: true,
+          duplicate: true,
+          referral_url: provider ? `https://trybaldwin.app/?ref=${encodeURIComponent(provider.code)}` : null,
+          kit_url: provider ? `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(provider.code)}` : null
+        }, 200);
+      }
+
+      const leadId = uuid();
+      await env.DB.batch([
+        env.DB.prepare(`INSERT INTO provider_leads (id,practice_name,contact_name,email,phone,website,city,state,notes,stage) VALUES (?,?,?,?,?,?,?,?,?,'pilot')`)
+          .bind(leadId, lead.practice_name, lead.contact_name, lead.email, lead.phone, lead.website, lead.city, lead.state, lead.notes),
+        env.DB.prepare(`INSERT INTO events (id,event_name,anonymous_id,source,metadata_json) VALUES (?, 'provider_lead_submit', ?, 'providers_form', ?)`)
+          .bind(uuid(), sourceHash, JSON.stringify({ lead_id: leadId }))
+      ]);
+
+      const provider = await ensureProviderForLead(env, lead);
+      const outreach = await ensureOutreachForLead(env, lead);
+      const copy = providerPilotCopy(lead, provider);
+      let emailResult = { sent: false, suppressed: Number(outreach.do_not_contact) === 1 };
+      try { emailResult = await sendProviderPilot(env, outreach, lead, provider); }
+      catch (error) { console.error('provider pilot email failed', clean(error?.message,300)); }
+
+      await env.DB.prepare(`INSERT INTO events (id,event_name,provider_code,source,metadata_json) VALUES (?, 'provider_pilot_created', ?, 'providers_form', ?)`)
+        .bind(uuid(), provider.code, JSON.stringify({ lead_id: leadId, email_sent: Boolean(emailResult.sent) })).run();
+
+      return json(request, env, {
+        ok: true,
+        provider_code: provider.code,
+        referral_url: copy.referralUrl,
+        kit_url: copy.kitUrl,
+        email_sent: Boolean(emailResult.sent),
+        email_suppressed: Boolean(emailResult.suppressed)
+      }, 201);
     }
 
     if (path.startsWith('/v1/admin/')) {

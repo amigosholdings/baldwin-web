@@ -1,0 +1,246 @@
+diff --git a/trackmyhairloss-pages/index.html b/trackmyhairloss-pages/index.html
+index 2602c74..05597ac 100644
+--- a/trackmyhairloss-pages/index.html
++++ b/trackmyhairloss-pages/index.html
+@@ -26,7 +26,7 @@ gtag('config', 'G-6FX9XXF3JK');
+ <body>
+ <nav class="nav"><div class="wrap navin">
+   <a class="brand" href="/" aria-label="Track My Hair Loss home"><span class="brandmark"></span><span>Track My Hair Loss<small>Hair tracking tools</small></span></a>
+-  <div class="navlinks"><a href="#tools">Tools</a><a href="/compare">Comparisons</a><a href="/treatments">Treatments</a><a href="/providers/">For providers</a><a class="btn dark" href="https://getbaldwin.app/download?c=tmhl_nav">Get Baldwin</a></div>
++  <div class="navlinks"><a href="#tools">Tools</a><a href="/compare">Comparisons</a><a href="/treatments">Treatments</a><a class="btn dark" href="https://getbaldwin.app/download?c=tmhl_nav">Get Baldwin</a></div>
+ </div></nav>
+ <main>
+   <section class="hero"><div class="wrap">
+@@ -63,6 +63,6 @@ gtag('config', 'G-6FX9XXF3JK');
+     <a class="btn signal" href="https://getbaldwin.app/download?c=tmhl_home" onclick="BaldwinGrowth.event('tool_cta_click',{tool:'hub'})">Get Baldwin for iPhone</a>
+   </div></section>
+ </main>
+-<footer class="foot"><div class="wrap footrow"><span>© 2026 Track My Hair Loss</span><span><a href="https://getbaldwin.app/">Baldwin</a></span></div></footer>
++<footer class="foot"><div class="wrap footrow"><span>© 2026 Track My Hair Loss</span><span><a href="/providers/">For providers</a> · <a href="https://getbaldwin.app/">Baldwin</a></span></div></footer>
+ <script src="/assets/growth.js"></script><script>BaldwinGrowth.event('tool_open',{tool:'hub'})</script>
+ </body></html>
+\ No newline at end of file
+diff --git a/trackmyhairloss-pages/providers/index.html b/trackmyhairloss-pages/providers/index.html
+index 949f120..f1ab044 100644
+--- a/trackmyhairloss-pages/providers/index.html
++++ b/trackmyhairloss-pages/providers/index.html
+@@ -4,14 +4,14 @@
+ <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Baldwin for Hair-Restoration Practices</title><meta name="description" content="Give hair-loss patients a simple, consistent way to photograph and track progress between visits. Free provider pilot."><link rel="canonical" href="https://trackmyhairloss.com/providers/"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet"><link rel="stylesheet" href="/assets/base.css"><style>
+ .provider-hero{display:grid;grid-template-columns:1.05fr .95fr;gap:70px;align-items:end}.provider-hero h1{max-width:8.5ch}.provider-plate{border:1px solid var(--ink);background:var(--navy);color:#fff;padding:28px;box-shadow:8px 8px 0 var(--mist)}.provider-plate .eyebrow{color:#a8c7d9}.provider-plate h2{font-size:42px;line-height:.98;letter-spacing:-.04em;margin:14px 0 28px}.flow{border-top:1px solid rgba(255,255,255,.45)}.flow div{display:grid;grid-template-columns:54px 1fr;gap:14px;padding:18px 0;border-bottom:1px solid rgba(255,255,255,.25)}.flow b{font:600 10px var(--mono);letter-spacing:.08em}.flow span{font-family:var(--serif);font-size:18px}.provider-grid{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--ink);border-left:1px solid var(--ink)}.provider-grid>div{padding:26px;border-right:1px solid var(--ink);border-bottom:1px solid var(--ink)}.provider-grid strong{font:600 10px var(--mono);text-transform:uppercase;letter-spacing:.1em;color:var(--oxide)}.provider-grid p{font:400 19px/1.5 var(--serif);margin:14px 0 0}.pilot{display:grid;grid-template-columns:.8fr 1.2fr;gap:60px}.pilot h2{font-size:clamp(42px,5vw,72px);line-height:.92;letter-spacing:-.05em;margin:0}.formstatus{margin-top:12px;font-size:13px;min-height:20px}.fine{font:400 11px/1.55 var(--mono);color:var(--muted);margin-top:14px}@media(max-width:900px){.provider-hero,.pilot{grid-template-columns:1fr}.provider-grid{grid-template-columns:1fr}}
+ </style></head><body>
+-<nav class="nav"><div class="wrap navin"><a class="brand" href="/"><span class="brandmark"></span><span>Track My Hair Loss<small>Baldwin provider pilot</small></span></a><div class="navlinks"><a href="/#tools">Patient tools</a><a href="#pilot">Free pilot</a><a class="btn dark" href="https://getbaldwin.app/">Baldwin</a></div></div></nav>
++<nav class="nav"><div class="wrap navin"><a class="brand" href="/" aria-label="Track My Hair Loss home"><span class="brandmark"></span><span>Track My Hair Loss<small>Hair tracking tools</small></span></a><div class="navlinks"><a href="/#tools">Tools</a><a href="/compare">Comparisons</a><a href="/treatments">Treatments</a><a class="btn dark" href="https://getbaldwin.app/download?c=tmhl_nav">Get Baldwin</a></div></div></nav>
+ <main>
+ <section class="hero"><div class="wrap provider-hero"><div><div class="kicker">For hair-restoration practices</div><h1>Give patients a better way to see their progress.</h1><p class="lead">Baldwin helps patients take repeatable hair photos, keep treatment changes alongside them, and compare the same views over time between visits.</p><div class="subnav"><a class="pill" href="#pilot">Request a free pilot</a><a class="pill" href="/comparator/">See the free comparator</a></div></div><aside class="provider-plate"><div class="eyebrow">Zero-staff-work workflow</div><h2>One card at checkout. Baldwin handles the rest.</h2><div class="flow"><div><b>01</b><span>Patient scans your practice QR code.</span></div><div><b>02</b><span>Baldwin guides a repeatable baseline.</span></div><div><b>03</b><span>The patient gets future check-ins and comparisons.</span></div></div></aside></div></section>
+ <section class="section"><div class="wrap"><div class="sectionhead"><h2>Built as a patient handoff, not clinic software.</h2><p>The pilot is intentionally lightweight. Your staff does not need another dashboard, another login, or patient-data entry.</p></div><div class="provider-grid"><div><strong>No integration</strong><p>No EHR connection or technical setup for your practice.</p></div><div><strong>No staff account</strong><p>Use a printable card, QR code, or text link at the end of a visit.</p></div><div><strong>Free pilot</strong><p>We are opening the first cohort to independent hair-restoration practices at no cost.</p></div></div></div></section>
+ <section class="section border" id="pilot"><div class="wrap pilot"><div><div class="kicker">Pilot cohort</div><h2>Put Baldwin in front of real patients.</h2><p class="lead" style="font-size:19px">We’ll create a practice-specific referral link and printable QR card so you can test it with patients immediately.</p></div><form class="tool-shell" id="providerForm" style="margin:0"><div class="fields2"><div class="field"><label>Practice name *</label><input name="practice_name" required autocomplete="organization"></div><div class="field"><label>Your name</label><input name="contact_name" autocomplete="name"></div></div><div class="fields2" style="margin-top:14px"><div class="field"><label>Work email *</label><input name="email" type="email" required autocomplete="email"></div><div class="field"><label>Phone</label><input name="phone" autocomplete="tel"></div></div><div class="fields2" style="margin-top:14px"><div class="field"><label>Website</label><input name="website" type="url" placeholder="https://"></div><div class="field"><label>City</label><input name="city" autocomplete="address-level2"></div></div><div class="field" style="margin-top:14px"><label>Anything useful to know?</label><textarea name="notes" placeholder="Hair transplant, PRP, dermatology, approximate patient volume…"></textarea></div><div style="display:none" aria-hidden="true"><label>Leave blank<input name="company_site" tabindex="-1" autocomplete="off"></label></div><button class="btn signal" type="submit" style="margin-top:16px">Request the free pilot</button><div class="formstatus" id="status" aria-live="polite"></div><div class="fine">No patient information is requested from the practice.</div></form></div></section>
+-</main><footer class="foot"><div class="wrap footrow"><span>© 2026 Baldwin / Track My Hair Loss</span><span><a href="/">Patient tools</a></span></div></footer>
++</main><footer class="foot"><div class="wrap footrow"><span>© 2026 Baldwin / Track My Hair Loss</span><span><a href="/">Patient tools</a> · <a href="/providers/">For providers</a></span></div></footer>
+ <script src="/assets/growth.js"></script><script>
+ BaldwinGrowth.event('tool_open',{tool:'providers'});
+ const form=document.getElementById('providerForm'),statusEl=document.getElementById('status');
+-form.addEventListener('submit',async e=>{e.preventDefault();statusEl.textContent='';const fd=new FormData(form);if(fd.get('company_site'))return;const body=Object.fromEntries(fd.entries());try{const r=await fetch(window.BALDWIN_GROWTH_API+'/v1/provider-leads',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw new Error('submit_failed');form.reset();statusEl.textContent='Received — we’ll follow up with a practice-specific pilot link.';BaldwinGrowth.event('tool_used',{tool:'provider_pilot_request'});if(typeof gtag==='function')gtag('event','generate_lead',{lead_type:'provider_pilot'})}catch(_){statusEl.textContent='Could not submit right now. Please try again shortly.'}});
++form.addEventListener('submit',async e=>{e.preventDefault();statusEl.textContent='';const fd=new FormData(form);if(fd.get('company_site'))return;const body=Object.fromEntries(fd.entries());try{const r=await fetch(window.BALDWIN_GROWTH_API+'/v1/provider-leads',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error||'submit_failed');form.reset();statusEl.textContent=data.email_sent?'You’re set. Your Baldwin pilot link and QR kit are ready, and we emailed them to you.':'You’re set. Your Baldwin pilot link and QR kit are ready.';if(data.referral_url){statusEl.append(document.createElement('br'));const a=document.createElement('a');a.href=data.referral_url;a.textContent='Open patient referral link';a.rel='noopener';statusEl.append(a)}if(data.kit_url){statusEl.append(document.createTextNode(' · '));const a=document.createElement('a');a.href=data.kit_url;a.textContent='Open QR / patient card';a.rel='noopener';statusEl.append(a)}BaldwinGrowth.event('tool_used',{tool:'provider_pilot_request'});if(typeof gtag==='function')gtag('event','generate_lead',{lead_type:'provider_pilot'})}catch(err){statusEl.textContent=err.message==='rate_limited'?'Too many requests from this connection. Please try again later.':'Could not submit right now. Please try again shortly.'}});
+ </script></body></html>
+diff --git a/worker/src/index.js b/worker/src/index.js
+index 667b2b6..330197b 100644
+--- a/worker/src/index.js
++++ b/worker/src/index.js
+@@ -208,6 +208,120 @@ async function sendOutreach(env, outreach, { force = false } = {}) {
+   return { id: sent.id, message_id: messageId, subject: copy.subject };
+ }
+ 
++async function hashToken(value = '') {
++  const bytes = new TextEncoder().encode(String(value));
++  const digest = await crypto.subtle.digest('SHA-256', bytes);
++  return Array.from(new Uint8Array(digest)).map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 32);
++}
++
++async function ensureProviderForLead(env, lead) {
++  let provider = await env.DB.prepare(`
++    SELECT * FROM providers
++    WHERE lower(email)=lower(?) OR lower(name)=lower(?)
++    ORDER BY CASE WHEN lower(email)=lower(?) THEN 0 ELSE 1 END
++    LIMIT 1
++  `).bind(lead.email, lead.practice_name, lead.email).first();
++  if (provider) {
++    await env.DB.prepare(`
++      UPDATE providers SET
++        contact_name=COALESCE(NULLIF(?,''),contact_name),
++        email=COALESCE(NULLIF(?,''),email),
++        phone=COALESCE(NULLIF(?,''),phone),
++        website=COALESCE(NULLIF(?,''),website),
++        city=COALESCE(NULLIF(?,''),city),
++        state=COALESCE(NULLIF(?,''),state),
++        status=CASE WHEN status IN ('paused','lost') THEN 'pilot' ELSE status END
++      WHERE id=?
++    `).bind(lead.contact_name, lead.email, lead.phone, lead.website, lead.city, lead.state, provider.id).run();
++    return env.DB.prepare('SELECT * FROM providers WHERE id=? LIMIT 1').bind(provider.id).first();
++  }
++
++  const base = slug(lead.practice_name) || `provider-${Math.random().toString(36).slice(2,8)}`;
++  let code = base;
++  for (let i = 0; i < 5 && await env.DB.prepare('SELECT 1 FROM providers WHERE code=?').bind(code).first(); i++) {
++    code = `${base}-${Math.random().toString(36).slice(2,6)}`;
++  }
++  const id = uuid();
++  await env.DB.prepare(`
++    INSERT INTO providers (id,code,name,website,city,state,contact_name,email,phone,status)
++    VALUES (?,?,?,?,?,?,?,?,?,'pilot')
++  `).bind(id, code, lead.practice_name, lead.website, lead.city, lead.state, lead.contact_name, lead.email, lead.phone).run();
++  return env.DB.prepare('SELECT * FROM providers WHERE id=? LIMIT 1').bind(id).first();
++}
++
++async function ensureOutreachForLead(env, lead) {
++  let outreach = await env.DB.prepare('SELECT * FROM outreach WHERE lower(email)=lower(?) ORDER BY created_at DESC LIMIT 1').bind(lead.email).first();
++  if (outreach) {
++    if (!Number(outreach.do_not_contact)) {
++      await env.DB.prepare(`
++        UPDATE outreach SET practice_name=?, website=COALESCE(NULLIF(?,''),website), city=COALESCE(NULLIF(?,''),city),
++          category='inbound provider lead', stage='pilot', source_url=COALESCE(NULLIF(?,''),source_url),
++          source_type='provider_form', notes=COALESCE(notes || char(10),'') || 'Inbound provider pilot request.', updated_at=CURRENT_TIMESTAMP
++        WHERE id=?
++      `).bind(lead.practice_name, lead.website, lead.city, lead.website, outreach.id).run();
++      outreach = await env.DB.prepare('SELECT * FROM outreach WHERE id=? LIMIT 1').bind(outreach.id).first();
++    }
++    return outreach;
++  }
++
++  const id = uuid();
++  await env.DB.prepare(`
++    INSERT INTO outreach (id,practice_name,website,email,city,category,priority,source_url,source_type,stage,notes)
++    VALUES (?,?,?,?,?,'inbound provider lead',1,?,'provider_form','pilot','Inbound provider pilot request.')
++  `).bind(id, lead.practice_name, lead.website, lead.email, lead.city, lead.website).run();
++  return env.DB.prepare('SELECT * FROM outreach WHERE id=? LIMIT 1').bind(id).first();
++}
++
++function providerPilotCopy(lead, provider) {
++  const referralUrl = `https://trybaldwin.app/?ref=${encodeURIComponent(provider.code)}`;
++  const kitUrl = `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(provider.code)}`;
++  const hello = lead.contact_name ? `Hi ${lead.contact_name},` : `Hi ${lead.practice_name} team,`;
++  const subject = 'Your Baldwin provider pilot is ready';
++  const body = `${hello}
++
++Thanks for requesting a Baldwin pilot. Your practice-specific setup is ready.
++
++Patient link:
++${referralUrl}
++
++Printable QR / patient card:
++${kitUrl}
++
++There is no clinic login or patient upload workflow. Patients scan your link, take a guided baseline, and Baldwin handles their progress tracking.
++
++If you would prefer physical cards for the front desk, reply with the best mailing address and I’ll send a small starter stack at no cost.
++
++Best,
++Shaun
++Baldwin
++https://trybaldwin.app/`;
++  return { subject, body, referralUrl, kitUrl };
++}
++
++async function sendProviderPilot(env, outreach, lead, provider) {
++  if (!env.REPLY_DOMAIN || !env.RESEND_API_KEY || !env.OUTREACH_FROM || Number(outreach.do_not_contact)) {
++    return { sent: false, suppressed: Number(outreach.do_not_contact) === 1 };
++  }
++  const copy = providerPilotCopy(lead, provider);
++  const sent = await sendResendEmail(env, {
++    outreach,
++    to: lead.email,
++    subject: copy.subject,
++    body: copy.body,
++    idempotencyKey: `baldwin-provider-pilot-${outreach.id}`
++  });
++  await env.DB.batch([
++    env.DB.prepare(`
++      INSERT OR IGNORE INTO email_messages (id,outreach_id,direction,provider,provider_email_id,from_email,to_email,subject,text_body,status)
++      VALUES (?,?,'outbound','resend',?,?,?,?,?,'sent')
++    `).bind(uuid(), outreach.id, clean(sent.id,180), extractEmailAddress(env.OUTREACH_FROM), lead.email, copy.subject, copy.body),
++    env.DB.prepare(`
++      UPDATE outreach SET stage='pilot', email_status='sent', last_contacted_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?
++    `).bind(outreach.id)
++  ]);
++  return { sent: true, id: sent.id };
++}
++
+ function emailBody(email = {}) {
+   if (email.text) return String(email.text);
+   return String(email.html || '')
+@@ -475,13 +589,69 @@ export default {
+       const body = await bodyJson(request);
+       if (!body?.practice_name || !body?.email) return json(request, env, { error: 'practice_name_and_email_required' }, 400);
+       if (body.company_site) return json(request, env, { ok: true }, 201);
+-      const email = clean(body.email,180);
+-      if (!/^\S+@\S+\.\S+$/.test(email)) return json(request, env, { error: 'invalid_email' }, 400);
+-      const duplicate = await env.DB.prepare(`SELECT id FROM provider_leads WHERE lower(email)=lower(?) AND created_at >= datetime('now','-1 day') LIMIT 1`).bind(email).first();
+-      if (duplicate) return json(request, env, { ok: true, duplicate: true }, 200);
+-      await env.DB.prepare(`INSERT INTO provider_leads (id,practice_name,contact_name,email,phone,website,city,state,notes,stage) VALUES (?,?,?,?,?,?,?,?,?,'new')`)
+-        .bind(uuid(), clean(body.practice_name,160), clean(body.contact_name,160), email, clean(body.phone,80), clean(body.website,240), clean(body.city,120), clean(body.state,80), clean(body.notes,1000)).run();
+-      return json(request, env, { ok: true }, 201);
++
++      const lead = {
++        practice_name: clean(body.practice_name,160),
++        contact_name: clean(body.contact_name,160),
++        email: extractEmailAddress(clean(body.email,180)),
++        phone: clean(body.phone,80),
++        website: clean(body.website,240),
++        city: clean(body.city,120),
++        state: clean(body.state,80),
++        notes: clean(body.notes,1000)
++      };
++      if (!lead.email) return json(request, env, { error: 'invalid_email' }, 400);
++
++      // The public form can create a referral code and send one transactional pilot email,
++      // but it never creates clinic credentials or grants access to patient data. Throttle
++      // accepted submissions by source IP and suppress repeated email sends for 24 hours.
++      const sourceIp = clean(request.headers.get('CF-Connecting-IP') || request.headers.get('x-forwarded-for') || 'unknown', 160).split(',')[0].trim();
++      const sourceHash = await hashToken(sourceIp);
++      const recent = await env.DB.prepare(`
++        SELECT COUNT(*) AS n FROM events
++        WHERE event_name='provider_lead_submit' AND anonymous_id=? AND created_at >= datetime('now','-1 hour')
++      `).bind(sourceHash).first();
++      if (Number(recent?.n || 0) >= 5) return json(request, env, { error: 'rate_limited' }, 429);
++
++      const duplicate = await env.DB.prepare(`
++        SELECT id FROM provider_leads WHERE lower(email)=lower(?) AND created_at >= datetime('now','-1 day') LIMIT 1
++      `).bind(lead.email).first();
++      if (duplicate) {
++        const provider = await env.DB.prepare(`SELECT * FROM providers WHERE lower(email)=lower(?) OR lower(name)=lower(?) LIMIT 1`).bind(lead.email, lead.practice_name).first();
++        return json(request, env, {
++          ok: true,
++          duplicate: true,
++          referral_url: provider ? `https://trybaldwin.app/?ref=${encodeURIComponent(provider.code)}` : null,
++          kit_url: provider ? `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(provider.code)}` : null
++        }, 200);
++      }
++
++      const leadId = uuid();
++      await env.DB.batch([
++        env.DB.prepare(`INSERT INTO provider_leads (id,practice_name,contact_name,email,phone,website,city,state,notes,stage) VALUES (?,?,?,?,?,?,?,?,?,'pilot')`)
++          .bind(leadId, lead.practice_name, lead.contact_name, lead.email, lead.phone, lead.website, lead.city, lead.state, lead.notes),
++        env.DB.prepare(`INSERT INTO events (id,event_name,anonymous_id,source,metadata_json) VALUES (?, 'provider_lead_submit', ?, 'providers_form', ?)`)
++          .bind(uuid(), sourceHash, JSON.stringify({ lead_id: leadId }))
++      ]);
++
++      const provider = await ensureProviderForLead(env, lead);
++      const outreach = await ensureOutreachForLead(env, lead);
++      const copy = providerPilotCopy(lead, provider);
++      let emailResult = { sent: false, suppressed: Number(outreach.do_not_contact) === 1 };
++      try { emailResult = await sendProviderPilot(env, outreach, lead, provider); }
++      catch (error) { console.error('provider pilot email failed', clean(error?.message,300)); }
++
++      await env.DB.prepare(`INSERT INTO events (id,event_name,provider_code,source,metadata_json) VALUES (?, 'provider_pilot_created', ?, 'providers_form', ?)`)
++        .bind(uuid(), provider.code, JSON.stringify({ lead_id: leadId, email_sent: Boolean(emailResult.sent) })).run();
++
++      return json(request, env, {
++        ok: true,
++        provider_code: provider.code,
++        referral_url: copy.referralUrl,
++        kit_url: copy.kitUrl,
++        email_sent: Boolean(emailResult.sent),
++        email_suppressed: Boolean(emailResult.suppressed)
++      }, 201);
+     }
+ 
+     if (path.startsWith('/v1/admin/')) {
