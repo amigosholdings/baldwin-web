@@ -140,3 +140,7 @@ Do not commit runtime secrets or Google service-account JSON files.
 ## Growth operator
 
 `trackmyhairloss-pages/ops/` is the internal control room for both acquisition loops. Provider email/reply setup is documented in `EMAIL_OPERATOR.md`; article generation, preview/publish, and Search Console feedback setup are documented in `CONTENT_OPERATOR.md`.
+
+### Final integration setup
+
+After Resend is configured, run `scripts/setup-gtm-integrations.sh` to finish IndexNow, Search Console, OpenRouter, the content Worker, and the Growth Worker. See `FINAL_SETUP.md`.

@@ -75,16 +75,17 @@ The Worker validates the Svix signature, rejects stale webhook timestamps, and d
 
 ## 4. Configure the response agent
 
-Add an OpenAI API key:
+Reuse your existing OpenRouter API key:
 
 ```bash
-npx wrangler secret put OPENAI_API_KEY
+npx wrangler secret put OPENROUTER_API_KEY
 ```
 
 The default model is set in `wrangler.toml`:
 
 ```toml
-OPENAI_MODEL = "gpt-5.4-nano"
+OPENROUTER_MODEL = "openai/gpt-5.6-luna:floor"
+# Existing OPENAI_MODEL = "gpt-5.6-luna" also works as a backward-compatible fallback.
 ```
 
 The agent only classifies and drafts. It does not auto-send. Replies involving substantive medical, legal, privacy, security, contract, pricing-negotiation, or other questions outside the known Baldwin pitch are marked `needs_human` rather than guessed at.

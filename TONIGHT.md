@@ -98,7 +98,7 @@ cd worker
 npm run db:migrate:v3:remote
 npx wrangler secret put RESEND_API_KEY
 npx wrangler secret put RESEND_WEBHOOK_SECRET
-npx wrangler secret put OPENAI_API_KEY
+npx wrangler secret put OPENROUTER_API_KEY
 npm run deploy
 ```
 

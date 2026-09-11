@@ -71,3 +71,17 @@ Finally push/deploy `trackmyhairloss-pages/` so the new `/ops/` UI is live.
 5. Configure Search Console and IndexNow, then confirm those pills turn green and test **Run SEO feedback**.
 
 The objective remains distribution: use this to create genuinely useful pages around the tracking problem and treatment decision questions, not to manufacture a large article count.
+
+
+## IndexNow and Search Console secrets
+
+You do **not** obtain `INDEXNOW_KEY` from a vendor dashboard. Generate any 8–128 character IndexNow-compatible key; the included `scripts/setup-gtm-integrations.sh` generates a 32-character hex key and stores it as a Cloudflare secret. The Worker serves that key at `/indexnow-key.txt` and includes that URL as `keyLocation` in IndexNow submissions.
+
+`GSC_SERVICE_ACCOUNT_JSON` is the complete JSON private-key file for a Google Cloud service account. Create a service account in a Google Cloud project, enable the Search Console API, create/download a JSON key, then add the JSON file's `client_email` to the `trackmyhairloss.com` Search Console property under **Settings → Users and permissions**. The Worker requests the read-only Search Console scope. Store the whole JSON file with:
+
+```bash
+cd content-worker
+npx wrangler secret put GSC_SERVICE_ACCOUNT_JSON < ~/Downloads/YOUR-SERVICE-ACCOUNT.json
+```
+
+See `FINAL_SETUP.md` for the shortest setup path.

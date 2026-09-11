@@ -83,6 +83,14 @@ async function providerByCode(env, rawCode) {
   return env.DB.prepare(`SELECT id, code, name, website, city, state, status FROM providers WHERE code = ? LIMIT 1`).bind(code).first();
 }
 
+function openRouterModel(env) {
+  const configured = String(env.OPENROUTER_MODEL || env.OPENAI_MODEL || 'gpt-5.6-luna').trim();
+  if (!configured) return 'openai/gpt-5.6-luna:floor';
+  if (configured.includes('/')) return configured;
+  const withProvider = `openai/${configured}`;
+  return withProvider.endsWith(':floor') ? withProvider : `${withProvider}:floor`;
+}
+
 async function dashboard(env) {
   const [totals, providers, leads, outreach, messages] = await Promise.all([
     env.DB.prepare(`SELECT event_name, COUNT(*) AS n FROM events GROUP BY event_name ORDER BY event_name`).all(),
@@ -120,8 +128,9 @@ async function dashboard(env) {
       resend: Boolean(env.RESEND_API_KEY),
       from: env.OUTREACH_FROM || '',
       reply_domain: env.REPLY_DOMAIN || '',
-      ai: Boolean(env.OPENAI_API_KEY),
-      model: env.OPENAI_MODEL || 'gpt-5.4-nano',
+      ai: Boolean(env.OPENROUTER_API_KEY),
+      ai_provider: 'openrouter',
+      model: openRouterModel(env),
       webhook: Boolean(env.RESEND_WEBHOOK_SECRET)
     }
   };
@@ -263,7 +272,7 @@ function extractResponseText(response) {
 
 async function analyzeReply(env, outreach, email) {
   const body = stripQuotedReply(emailBody(email));
-  if (!env.OPENAI_API_KEY || !body) return heuristicReplyAnalysis(body || email.subject || '');
+  if (!env.OPENROUTER_API_KEY || !body) return heuristicReplyAnalysis(body || email.subject || '');
   const schema = {
     type: 'object', additionalProperties: false,
     properties: {
@@ -275,22 +284,34 @@ async function analyzeReply(env, outreach, email) {
     required: ['category','summary','draft_reply','needs_human']
   };
   const input = `Practice: ${outreach.practice_name}\nOriginal outreach purpose: offer a free pilot of Baldwin, an iPhone app that helps hair-loss patients take consistent progress photos between visits.\nInbound subject: ${email.subject || ''}\nInbound reply:\n${body}`;
-  const response = await fetch('https://api.openai.com/v1/responses', {
+  const instructions = 'Classify this B2B clinic reply and draft a concise founder-style response. Never make medical efficacy claims. Never invent pricing, security, integrations, dates, or availability. If the sender asks a clinical, legal, privacy, security, contract, pricing-negotiation, or other substantive question that is not directly answered by the supplied context, set needs_human=true and draft a short acknowledgement rather than guessing. Keep the draft under 90 words. For unsubscribe or explicit rejection, confirm politely and do not sell further. Return only the requested schema.';
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
-    headers: { 'authorization': `Bearer ${env.OPENAI_API_KEY}`, 'content-type': 'application/json' },
+    headers: {
+      'authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
+      'content-type': 'application/json',
+      'HTTP-Referer': 'https://trybaldwin.app',
+      'X-Title': 'Baldwin Growth Operator'
+    },
     body: JSON.stringify({
-      model: env.OPENAI_MODEL || 'gpt-5.4-nano',
-      store: false,
+      model: openRouterModel(env),
+      messages: [
+        { role: 'system', content: instructions },
+        { role: 'user', content: input }
+      ],
       reasoning: { effort: 'none' },
-      text: { verbosity: 'low', format: { type: 'json_schema', name: 'baldwin_reply_analysis', strict: true, schema } },
-      instructions: 'Classify this B2B clinic reply and draft a concise founder-style response. Never make medical efficacy claims. Never invent pricing, security, integrations, dates, or availability. If the sender asks a clinical, legal, privacy, security, contract, pricing-negotiation, or other substantive question that is not directly answered by the supplied context, set needs_human=true and draft a short acknowledgement rather than guessing. Keep the draft under 90 words. For unsubscribe or explicit rejection, confirm politely and do not sell further. Return only the requested schema.',
-      input
+      provider: { require_parameters: true, sort: 'price' },
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'baldwin_reply_analysis', strict: true, schema }
+      }
     })
   });
   if (!response.ok) return heuristicReplyAnalysis(body);
   const payload = await response.json();
   try {
-    const parsed = JSON.parse(extractResponseText(payload));
+    const content = payload?.choices?.[0]?.message?.content;
+    const parsed = JSON.parse(typeof content === 'string' ? content : '');
     if (!REPLY_CATEGORIES.has(parsed.category)) throw new Error('bad_category');
     return {
       category: parsed.category,
