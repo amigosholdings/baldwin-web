@@ -136,3 +136,7 @@ The content Worker currently keeps medical content review-gated:
 - `SEO_REFRESH_MEDICAL = false`
 
 Do not commit runtime secrets or Google service-account JSON files.
+
+## Provider email operator
+
+`trackmyhairloss-pages/ops/` is the internal control room for the provider GTM loop. Email sending, inbound reply classification/drafting, suppression state, and setup are documented in `EMAIL_OPERATOR.md`.

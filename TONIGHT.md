@@ -88,3 +88,18 @@ Hold the $300 until the first 20–30 provider contacts and initial comparator t
 - If the comparator converts to app clicks: put a small test budget behind high-intent search traffic to that tool and stop quickly if cost per qualified click is poor.
 
 Do not spend the budget on more product features, generic SEO article generation, or a clinic dashboard.
+
+## Email operator / reply agent
+
+After the existing growth database is live, run the v3 email migration and configure Resend + the reply agent before sending outreach:
+
+```bash
+cd worker
+npm run db:migrate:v3:remote
+npx wrangler secret put RESEND_API_KEY
+npx wrangler secret put RESEND_WEBHOOK_SECRET
+npx wrangler secret put OPENAI_API_KEY
+npm run deploy
+```
+
+Set `REPLY_DOMAIN` in `worker/wrangler.toml` first. Full setup and test instructions are in `EMAIL_OPERATOR.md`. The `/ops/` page can send one prospect, send the next 5/10 P1 prospects, receive/classify replies, and approve agent-drafted responses.

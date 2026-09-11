@@ -11,7 +11,9 @@
     "db:migrate:remote": "wrangler d1 execute baldwin-growth --remote --file=./schema.sql",
     "db:seed:outreach": "wrangler d1 execute baldwin-growth --remote --file=./seed-outreach-100-verified.sql",
     "db:seed:outreach:sample": "wrangler d1 execute baldwin-growth --remote --file=./seed-outreach.sql",
-    "db:migrate:v2:remote": "wrangler d1 execute baldwin-growth --remote --file=./migration-v2.sql"
+    "db:migrate:v2:remote": "wrangler d1 execute baldwin-growth --remote --file=./migration-v2.sql",
+    "db:migrate:v3:remote": "wrangler d1 execute baldwin-growth --remote --file=./migration-v3.sql",
+    "db:migrate:v3:local": "wrangler d1 execute baldwin-growth --local --file=./migration-v3.sql"
   },
   "devDependencies": {
     "wrangler": "^4.33.1"

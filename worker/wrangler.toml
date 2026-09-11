@@ -4,6 +4,9 @@ compatibility_date = "2026-09-01"
 
 [vars]
 ALLOWED_ORIGINS = "https://getbaldwin.app,https://trybaldwin.app,https://trackmyhairloss.com,http://localhost:8788,http://localhost:8000"
+OUTREACH_FROM = "Sean from Baldwin <sean@trybaldwin.app>"
+REPLY_DOMAIN = "trybaldwin.app"
+OPENAI_MODEL = "gpt-5.4-nano"
 
 [[d1_databases]]
 binding = "DB"
