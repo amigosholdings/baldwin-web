@@ -52,5 +52,9 @@ pattern = "trackmyhairloss.com/indexnow-key.txt"
 zone_name = "trackmyhairloss.com"
 
 [[routes]]
+pattern = "trackmyhairloss.com/articles.json"
+zone_name = "trackmyhairloss.com"
+
+[[routes]]
 pattern = "trackmyhairloss.com/feed.xml"
 zone_name = "trackmyhairloss.com"

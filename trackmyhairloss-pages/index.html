@@ -57,12 +57,36 @@ gtag('config', 'G-6FX9XXF3JK');
     </div>
   </div></section>
 
-  <section class="section border"><div class="wrap"><div class="sectionhead"><h2>Run a hair-restoration practice?</h2><p>Give patients a practice-specific QR code for consistent progress tracking between visits. The first pilot cohort is free and requires no clinic software.</p></div><a class="btn" href="/providers/">See the Baldwin provider pilot</a></div></section>
+  <section class="section border" id="articles"><div class="wrap">
+    <div class="sectionhead"><h2>Recent articles.</h2><p>Browse practical tracking guides and sourced explainers on hair-loss treatments and progress.</p></div>
+    <div class="toolgrid" id="recentArticles" aria-live="polite">
+      <a class="toolcard" href="/blog"><span class="toolmeta">Guides</span><h3>Hair progress guides</h3><p>Practical articles on taking consistent photos, comparing change, and keeping a useful record.</p><span class="toolgo">Browse guides ↗</span></a>
+      <a class="toolcard" href="/compare"><span class="toolmeta">Comparisons</span><h3>Treatment comparisons</h3><p>Sourced side-by-side comparisons of common hair-loss treatments.</p><span class="toolgo">Browse comparisons ↗</span></a>
+      <a class="toolcard" href="/treatments"><span class="toolmeta">Research</span><h3>Treatment library</h3><p>Evidence pages covering study results, regulatory status, side effects, and limitations.</p><span class="toolgo">Browse treatments ↗</span></a>
+    </div>
+    <div style="margin-top:24px"><a class="btn" href="/blog">Browse all articles</a></div>
+  </div></section>
 <section class="section border"><div class="wrap">
     <div class="sectionhead"><h2>Keep your timeline in one place.</h2><p>Baldwin keeps your baseline, follow-up photos, treatment history, and comparisons together on iPhone.</p></div>
     <a class="btn signal" href="https://getbaldwin.app/download?c=tmhl_home" onclick="BaldwinGrowth.event('tool_cta_click',{tool:'hub'})">Get Baldwin for iPhone</a>
   </div></section>
 </main>
 <footer class="foot"><div class="wrap footrow"><span>© 2026 Track My Hair Loss</span><span><a href="/providers/">For providers</a> · <a href="https://getbaldwin.app/">Baldwin</a></span></div></footer>
+<script>
+(function(){
+  const box=document.getElementById('recentArticles');
+  if(!box) return;
+  const esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const labels={tracking_guide:'Guide',question:'Explainer',treatment_comparison:'Comparison',treatment_profile:'Treatment research'};
+  fetch('/articles.json',{headers:{accept:'application/json'}})
+    .then(r=>r.ok?r.json():Promise.reject(new Error('articles')))
+    .then(data=>{
+      const rows=Array.isArray(data?.articles)?data.articles:[];
+      if(!rows.length) return;
+      box.innerHTML=rows.slice(0,6).map(a=>`<a class="toolcard" href="${esc(a.path)}"><span class="toolmeta">${esc(labels[a.content_type]||'Article')}</span><h3>${esc(a.title)}</h3><p>${esc(a.dek||'Read the latest Track My Hair Loss article.')}</p><span class="toolgo">Read ↗</span></a>`).join('');
+    })
+    .catch(()=>{});
+})();
+</script>
 <script src="/assets/growth.js"></script><script>BaldwinGrowth.event('tool_open',{tool:'hub'})</script>
 </body></html>

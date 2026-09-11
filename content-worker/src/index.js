@@ -810,7 +810,7 @@ function htmlShell({title,description,canonical,body,jsonLd='',robots='index, fo
 .foot{border-top:1px solid var(--ink);padding:25px 0 44px;color:var(--muted);font-size:12px}.footin{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
 @media(max-width:900px){.links a:not(.app){display:none}.content{grid-template-columns:1fr;gap:38px}.aside{position:static}.answerGrid{grid-template-columns:1fr;gap:9px}.post{grid-template-columns:1fr;gap:8px}.kind{justify-self:start}}
 @media(max-width:620px){.wrap{width:min(calc(100% - 24px),var(--max))}.navin{min-height:64px}.pageHero,.indexHero{padding-top:55px}h1{font-size:clamp(45px,14vw,68px)}.article p,.article li{font-size:17.5px}.content{padding-top:34px}.meta{width:100%}.meta span{flex:1 1 auto}}
-</style></head><body><nav class="nav"><div class="wrap navin"><a class="brand" href="/"><span class="mark"></span><span>Track My Hair Loss<small>Hair tracking tools</small></span></a><div class="links"><a href="/compare">Comparisons</a><a href="/treatments">Treatments</a><a href="/blog">Guides</a><a href="/#tools">Tools</a><a class="app" href="https://getbaldwin.app/download?c=tmhl_content">Get Baldwin</a></div></div></nav>${body}<footer class="foot"><div class="wrap footin"><span>© 2026 Track My Hair Loss</span><span><a href="https://getbaldwin.app/">Baldwin</a></span></div></footer><script>(function(){const A="https://baldwin-growth-api.threeamigosholdings.workers.dev";const id=localStorage.getItem("baldwin_anon_id")||(crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2));localStorage.setItem("baldwin_anon_id",id);function send(event,meta){try{if(typeof gtag==="function")gtag("event",event,{...meta,site:"trackmyhairloss",campaign:"organic_content"})}catch(_){}fetch(A+"/v1/events",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({event,anonymousId:id,source:"trackmyhairloss",campaign:"organic_content",metadata:meta})}).catch(()=>{})}send("blog_view",{page:location.pathname});document.querySelectorAll("a[href*=\"getbaldwin.app\"]").forEach(a=>a.addEventListener("click",()=>send("blog_cta_click",{page:location.pathname,href:a.href})));})();</script></body></html>`;
+</style></head><body><nav class="nav"><div class="wrap navin"><a class="brand" href="/"><span class="mark"></span><span>Track My Hair Loss<small>Hair tracking tools</small></span></a><div class="links"><a href="/compare">Comparisons</a><a href="/treatments">Treatments</a><a href="/blog">Guides</a><a href="/#tools">Tools</a><a class="app" href="https://getbaldwin.app/download?c=tmhl_content">Get Baldwin</a></div></div></nav>${body}<footer class="foot"><div class="wrap footin"><span>© 2026 Track My Hair Loss</span><span><a href="/providers/">For providers</a> · <a href="https://getbaldwin.app/">Baldwin</a></span></div></footer><script>(function(){const A="https://baldwin-growth-api.threeamigosholdings.workers.dev";const id=localStorage.getItem("baldwin_anon_id")||(crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2));localStorage.setItem("baldwin_anon_id",id);function send(event,meta){try{if(typeof gtag==="function")gtag("event",event,{...meta,site:"trackmyhairloss",campaign:"organic_content"})}catch(_){}fetch(A+"/v1/events",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({event,anonymousId:id,source:"trackmyhairloss",campaign:"organic_content",metadata:meta})}).catch(()=>{})}send("blog_view",{page:location.pathname});document.querySelectorAll("a[href*=\"getbaldwin.app\"]").forEach(a=>a.addEventListener("click",()=>send("blog_cta_click",{page:location.pathname,href:a.href})));})();</script></body></html>`;
 }
 
 function decorateCitations(html, sources) {
@@ -887,6 +887,18 @@ async function indexRows(env, types) {
   return (await env.DB.prepare(`SELECT slug,title,dek,content_type,published_at FROM content_pages WHERE status='published' AND content_type IN (${placeholders}) ORDER BY published_at DESC LIMIT 100`).bind(...types).all()).results || [];
 }
 
+async function recentArticlesJson(env) {
+  const rows = (await env.DB.prepare(`SELECT slug,title,dek,content_type,published_at
+    FROM content_pages WHERE status='published' ORDER BY published_at DESC LIMIT 6`).all()).results || [];
+  return Response.json({articles:rows.map(p=>({
+    title:p.title,
+    dek:p.dek,
+    content_type:p.content_type,
+    published_at:p.published_at,
+    path:contentPath(p)
+  }))},{headers:{'cache-control':'public, max-age=120'}});
+}
+
 async function renderIndex(env, kind) {
   const map = {
     blog:{types:['tracking_guide','question'],title:'Guides',h1:'How to track hair progress.',dek:'Practical guides to taking consistent photos, comparing change over time, and keeping a useful record.'},
@@ -956,6 +968,7 @@ export default {
     try {
       const u = new URL(req.url);
       const path = u.pathname.replace(/\/+$/,'') || '/';
+    if (path==='/articles.json') return recentArticlesJson(env);
     if (path==='/sitemap.xml') return sitemap(env);
     if (path==='/feed.xml') return feedXml(env);
     if (path==='/llms.txt') return llmsTxt(env);
