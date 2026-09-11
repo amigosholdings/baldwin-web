@@ -968,7 +968,7 @@ export default {
     if (path.startsWith('/treatments/')) return renderArticle(env,decodeURIComponent(path.slice(12)),'treatment_profile');
 
     if (path.startsWith('/__') && !adminOk(req,env)) return new Response('Unauthorized',{status:401});
-    if (path==='/__status') return Response.json({ok:true,model:MODEL,due:await due(env),auto_publish_standard:env.AUTO_PUBLISH_STANDARD,auto_publish_medical:env.AUTO_PUBLISH_MEDICAL,seo_autopilot:env.SEO_AUTOPILOT,seo_refresh_medical:env.SEO_REFRESH_MEDICAL,gsc_configured:Boolean(env.GSC_SERVICE_ACCOUNT_JSON),posts:await listAdmin(env)});
+    if (path==='/__status') return Response.json({ok:true,model:MODEL,due:await due(env),workers_ai_configured:Boolean(env.AI),indexnow_configured:Boolean(env.INDEXNOW_KEY),auto_publish_standard:env.AUTO_PUBLISH_STANDARD,auto_publish_medical:env.AUTO_PUBLISH_MEDICAL,seo_autopilot:env.SEO_AUTOPILOT,seo_refresh_medical:env.SEO_REFRESH_MEDICAL,gsc_configured:Boolean(env.GSC_SERVICE_ACCOUNT_JSON),posts:await listAdmin(env)});
     if (path==='/__ai-test' && req.method==='POST') {
       const result = await env.AI.run(MODEL, {
         messages:[{role:'user',content:'Reply with exactly the word OK.'}],

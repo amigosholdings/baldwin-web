@@ -87,7 +87,7 @@ Hold the $300 until the first 20–30 provider contacts and initial comparator t
 - If provider outreach is weak: use the budget to acquire a fresh, tightly targeted second batch rather than buying a bulk-send platform.
 - If the comparator converts to app clicks: put a small test budget behind high-intent search traffic to that tool and stop quickly if cost per qualified click is poor.
 
-Do not spend the budget on more product features, generic SEO article generation, or a clinic dashboard.
+Do not spend the budget on more product features or bulk commodity SEO. Use the on-demand content generator only for genuinely useful pages that support the search loop.
 
 ## Email operator / reply agent
 
@@ -103,3 +103,8 @@ npm run deploy
 ```
 
 Set `REPLY_DOMAIN` in `worker/wrangler.toml` first. Full setup and test instructions are in `EMAIL_OPERATOR.md`. The `/ops/` page can send one prospect, send the next 5/10 P1 prospects, receive/classify replies, and approve agent-drafted responses.
+
+
+## Search/content operator
+
+Deploy `trackmyhairloss-content` before redeploying the Growth Worker, because the Growth Worker now binds to it as the `CONTENT` service. Run the content D1 migrations if needed and set the same `ADMIN_TOKEN` secret on the content Worker. Then `/ops/` can generate one page on demand, preview drafts, publish editor-approved drafts, and run the Search Console feedback loop. See `CONTENT_OPERATOR.md`.

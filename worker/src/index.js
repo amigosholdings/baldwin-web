@@ -57,6 +57,26 @@ function isAdmin(request, env) {
 }
 async function bodyJson(request) { try { return await request.json(); } catch { return null; } }
 
+async function contentService(env, path, { method = 'GET', body = null } = {}) {
+  if (!env.CONTENT) throw new Error('CONTENT_service_binding_not_configured');
+  const init = { method, headers: { 'x-admin-token': env.ADMIN_TOKEN } };
+  if (body !== null) {
+    init.headers['content-type'] = 'application/json';
+    init.body = typeof body === 'string' ? body : JSON.stringify(body);
+  }
+  const response = await env.CONTENT.fetch(new Request(`https://trackmyhairloss-content.internal${path}`, init));
+  return response;
+}
+
+async function contentJson(env, path, opts = {}) {
+  const response = await contentService(env, path, opts);
+  const raw = await response.text();
+  let payload = {};
+  try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { raw }; }
+  if (!response.ok) throw new Error(payload?.error || raw || `content_service_${response.status}`);
+  return payload;
+}
+
 async function providerByCode(env, rawCode) {
   const code = slug(rawCode);
   if (!code) return null;
@@ -447,6 +467,47 @@ export default {
       if (!isAdmin(request, env)) return json(request, env, { error: 'unauthorized' }, 401);
 
       if (request.method === 'GET' && path === '/v1/admin/dashboard') return json(request, env, await dashboard(env));
+
+      if (request.method === 'GET' && path === '/v1/admin/content/status') {
+        try { return json(request, env, await contentJson(env, '/__status')); }
+        catch (error) { return json(request, env, { ok: false, error: clean(error?.message, 400) }, 502); }
+      }
+
+      if (request.method === 'POST' && path === '/v1/admin/content/generate') {
+        const body = await bodyJson(request) || {};
+        try {
+          return json(request, env, await contentJson(env, '/__generate', { method: 'POST', body: {
+            preferredType: clean(body.preferredType, 80) || null,
+            brief: clean(body.brief, 2000),
+            forcePublish: false
+          } }));
+        } catch (error) { return json(request, env, { ok: false, error: clean(error?.message, 500) }, 502); }
+      }
+
+      const contentPublishMatch = path.match(/^\/v1\/admin\/content\/publish\/(.+)$/);
+      if (request.method === 'POST' && contentPublishMatch) {
+        try { return json(request, env, await contentJson(env, `/__publish/${encodeURIComponent(decodeURIComponent(contentPublishMatch[1]))}`, { method: 'POST', body: {} })); }
+        catch (error) { return json(request, env, { ok: false, error: clean(error?.message, 500) }, 502); }
+      }
+
+      const contentPreviewMatch = path.match(/^\/v1\/admin\/content\/preview\/(.+)$/);
+      if (request.method === 'GET' && contentPreviewMatch) {
+        try {
+          const response = await contentService(env, `/__preview/${encodeURIComponent(decodeURIComponent(contentPreviewMatch[1]))}`);
+          const html = await response.text();
+          return new Response(html, { status: response.status, headers: {
+            'content-type': response.headers.get('content-type') || 'text/html; charset=utf-8',
+            'cache-control': 'private, no-store',
+            'access-control-allow-origin': allowedOrigin(request, env),
+            'vary': 'Origin'
+          } });
+        } catch (error) { return text(request, env, clean(error?.message, 500), 502); }
+      }
+
+      if (request.method === 'POST' && path === '/v1/admin/content/seo-run') {
+        try { return json(request, env, await contentJson(env, '/__seo-run', { method: 'POST', body: {} })); }
+        catch (error) { return json(request, env, { ok: false, error: clean(error?.message, 500) }, 502); }
+      }
 
       if (request.method === 'POST' && path === '/v1/admin/providers') {
         const body = await bodyJson(request);

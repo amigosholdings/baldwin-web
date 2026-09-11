@@ -67,14 +67,14 @@ On the existing `baldwin-growth-api` Worker:
 - Build command: `npm install`
 - Deploy command: `npx wrangler deploy`
 
-`ADMIN_TOKEN` remains stored as a Cloudflare Worker secret.
+`ADMIN_TOKEN` remains stored as a Cloudflare Worker secret. The Growth Worker also has a Cloudflare Service Binding named `CONTENT` to `trackmyhairloss-content`, so `/ops/` can drive the content engine without exposing its admin endpoints directly to the browser.
 
 ## Distribution surfaces
 
 - `https://trackmyhairloss.com/providers/` — provider pilot landing + lead capture
 - `https://trybaldwin.app/?ref=CODE` — attributed patient referral landing
 - `https://trackmyhairloss.com/provider-kit/?ref=CODE` — printable referral card/QR kit
-- `https://trackmyhairloss.com/ops/` — admin-token growth dashboard
+- `https://trackmyhairloss.com/ops/` — admin-token growth dashboard, email operator, and content generator
 
 See `TONIGHT.md` for the launch sequence.
 
@@ -137,6 +137,6 @@ The content Worker currently keeps medical content review-gated:
 
 Do not commit runtime secrets or Google service-account JSON files.
 
-## Provider email operator
+## Growth operator
 
-`trackmyhairloss-pages/ops/` is the internal control room for the provider GTM loop. Email sending, inbound reply classification/drafting, suppression state, and setup are documented in `EMAIL_OPERATOR.md`.
+`trackmyhairloss-pages/ops/` is the internal control room for both acquisition loops. Provider email/reply setup is documented in `EMAIL_OPERATOR.md`; article generation, preview/publish, and Search Console feedback setup are documented in `CONTENT_OPERATOR.md`.

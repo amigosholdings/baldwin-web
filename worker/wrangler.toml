@@ -12,3 +12,7 @@ OPENAI_MODEL = "gpt-5.4-nano"
 binding = "DB"
 database_name = "baldwin-growth"
 database_id = "48fcce74-b672-40aa-8080-9a04021cd5b9"
+
+[[services]]
+binding = "CONTENT"
+service = "trackmyhairloss-content"
