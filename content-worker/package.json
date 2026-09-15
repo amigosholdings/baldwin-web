@@ -4,7 +4,8 @@
   "version": "4.0.0",
   "type": "module",
   "scripts": {
-    "deploy": "wrangler deploy",
+    "queue:create": "wrangler queues create trackmyhairloss-content-jobs || true",
+    "deploy": "npm run queue:create && wrangler deploy",
     "dev": "wrangler dev",
     "migrate": "wrangler d1 execute baldwin-growth --remote --file=./migration-v2.sql",
     "seed": "wrangler d1 execute baldwin-growth --remote --file=./seed.sql",
