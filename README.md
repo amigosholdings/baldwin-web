@@ -6,7 +6,7 @@ Monorepo for Baldwin's public growth/acquisition web stack.
 
 | Directory | Cloudflare target | Production surface |
 |---|---|---|
-| `getbaldwin-pages/` | Pages project + `/download` Function | `getbaldwin.app` (product site + tracked App Store/offer handoff) |
+| `getbaldwin-pages/` | Worker `baldwin-getbaldwin` + Static Assets | `getbaldwin.app` (product site + tracked App Store/offer handoff) |
 | `trackmyhairloss-pages/` | Pages project | `trackmyhairloss.com` (tools, provider acquisition, provider kit, ops) |
 | `trybaldwin-pages/` | Pages project | `trybaldwin.app` patient referral landing |
 | `content-worker/` | Worker `trackmyhairloss-content` | Dynamic `/blog`, `/compare`, `/treatments`, sitemap/feed/llms routes |
@@ -19,22 +19,21 @@ The current Google Analytics tag is `G-6FX9XXF3JK`.
 Use this same GitHub repository for all five Cloudflare applications.
 
 
-### GetBaldwin Pages
+### GetBaldwin Worker
 
-Create/connect a Pages project for the product site:
+Deploy the product site through the existing `baldwin-getbaldwin` Worker:
 
 - Production branch: `main`
 - Root directory: `getbaldwin-pages`
-- Framework preset: None
-- Build command: leave blank
-- Build output directory: `.`
-- Custom domain: `getbaldwin.app`
+- Build command: `exit 0` (or blank)
+- Deploy command: `npx wrangler deploy`
+- Static asset root: `getbaldwin-pages/public` (configured in `wrangler.jsonc`)
 - Optional env: `GROWTH_API_URL=https://baldwin-growth-api.threeamigosholdings.workers.dev`
 - Env: `APP_STORE_PROVIDER_TOKEN=<App Store campaign pt token>`
 - Env: `APP_STORE_PROVIDER_CAMPAIGN_TOKEN=provider_referral`
 - Optional env: `APP_STORE_WEBSITE_CAMPAIGN_TOKEN=website`
 
-The Pages Function at `/download` records the handoff server-side. Valid provider referrals with an Apple custom offer code are redirected to Apple's prefilled offer-code redemption flow; all failures fall open to the normal App Store listing.
+The Worker entrypoint routes `/download` into the existing referral/offer handoff implementation. Valid provider referrals with an Apple custom offer code are redirected to Apple's prefilled offer-code redemption flow; all failures fall open to the normal App Store listing. Static files are served by Workers Static Assets from `public/`, so dependencies and Worker source are never uploaded as public assets.
 
 ### TrackMyHairLoss Pages
 
@@ -173,4 +172,4 @@ After Resend is configured, run `scripts/setup-gtm-integrations.sh` to finish In
 
 ## getbaldwin.app
 
-The deployable `getbaldwin.app` Pages project lives in `getbaldwin-pages/`. See `getbaldwin-pages/HANDOFF.md` for its Growth Worker contract, required Pages variables, local verification, and Cloudflare deployment settings.
+The deployable `getbaldwin.app` Worker lives in `getbaldwin-pages/`. See `getbaldwin-pages/HANDOFF.md` for its Growth Worker contract, required Worker variables, local verification, and Cloudflare deployment settings.

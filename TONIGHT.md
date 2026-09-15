@@ -45,11 +45,11 @@ New surfaces:
 
 The existing free tools remain live and attribution-aware.
 
-## 3. Deploy GetBaldwin Pages
+## 3. Deploy GetBaldwin Worker
 
-Cloudflare Pages root: `getbaldwin-pages/`. Move the existing `getbaldwin.app` custom domain to this Git-connected project after validating its `*.pages.dev` deployment. The `/download` Pages Function records the server-side handoff and redirects valid provider referrals to Apple offer-code redemption.
+Cloudflare Worker root: `getbaldwin-pages/`. Deploy the existing `baldwin-getbaldwin` Worker with `npx wrangler deploy` and validate its `*.workers.dev` deployment first. Static assets come only from `getbaldwin-pages/public/`; `/download` is handled by the Worker adapter and reuses the existing referral/offer handoff logic. After validation, move `getbaldwin.app` to this Worker.
 
-Before moving the custom domain, configure these Pages variables:
+Before moving the custom domain, configure these Worker variables:
 
 - `APP_STORE_PROVIDER_TOKEN` — the `pt` value from any Baldwin App Store Connect campaign link
 - `APP_STORE_PROVIDER_CAMPAIGN_TOKEN` — the `ct` value from the provider-referral campaign

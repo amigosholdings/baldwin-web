@@ -71,7 +71,7 @@ In App Store Connect -> Baldwin -> Analytics -> Acquisition -> Campaigns, create
 - `provider_referral`
 - optionally `website`
 
-Copy the Apple `pt` provider token from the generated campaign link. In the Cloudflare Pages project serving `getbaldwin.app`, configure:
+Copy the Apple `pt` provider token from the generated campaign link. On the `baldwin-getbaldwin` Worker serving `getbaldwin.app`, configure:
 
 - `APP_STORE_PROVIDER_TOKEN` = Apple `pt`
 - `APP_STORE_PROVIDER_CAMPAIGN_TOKEN` = provider-referral `ct`

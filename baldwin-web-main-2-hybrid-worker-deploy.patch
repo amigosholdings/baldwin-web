@@ -1,0 +1,390 @@
+diff --git a/CLOUDFLARE.md b/CLOUDFLARE.md
+index 74b5146..b0e66a5 100644
+--- a/CLOUDFLARE.md
++++ b/CLOUDFLARE.md
+@@ -1,6 +1,6 @@
+ # Cloudflare application roots
+ 
+-- Pages / GetBaldwin: `getbaldwin-pages`
++- Worker / GetBaldwin: `getbaldwin-pages` (`baldwin-getbaldwin`)
+ - Pages / TrackMyHairLoss: `trackmyhairloss-pages`
+ - Pages / TryBaldwin: `trybaldwin-pages`
+ - Worker / Content: `content-worker`
+@@ -8,16 +8,16 @@
+ 
+ Both Workers bind the existing D1 database named `baldwin-growth`.
+ 
+-## GetBaldwin Pages variables
++## GetBaldwin Worker variables
+ 
+-Configure these on the Pages project serving `getbaldwin.app`:
++Configure these on the `baldwin-getbaldwin` Worker serving `getbaldwin.app`:
+ 
+ - `APP_STORE_PROVIDER_TOKEN` — App Store Connect `pt` token
+ - `APP_STORE_PROVIDER_CAMPAIGN_TOKEN` — `ct` for provider referrals
+ - `APP_STORE_WEBSITE_CAMPAIGN_TOKEN` — optional `ct` for direct website acquisition
+ - `GROWTH_API_URL` — optional override for the Baldwin Growth API
+ 
+-The `/download` Function fails open to the normal App Store listing if provider lookup/Growth API is unavailable.
++The `/download` Worker route fails open to the normal App Store listing if provider lookup/Growth API is unavailable. Static assets are restricted to `getbaldwin-pages/public` by `wrangler.jsonc`.
+ 
+ ## Growth Worker provider-offer secrets
+ 
+@@ -28,4 +28,4 @@ Configure these as Worker secrets on `baldwin-growth-api`:
+ - `ASC_PRIVATE_KEY`
+ - `ASC_PROVIDER_OFFER_ID`
+ 
+-These let the existing provider onboarding flow provision clinic-specific Apple custom codes asynchronously. They must never be committed or exposed to Pages/mobile clients.
++These let the existing provider onboarding flow provision clinic-specific Apple custom codes asynchronously. They must never be committed or exposed to web/mobile clients.
+diff --git a/PROVIDER_OFFER_SETUP.md b/PROVIDER_OFFER_SETUP.md
+index d20385e..7b881c9 100644
+--- a/PROVIDER_OFFER_SETUP.md
++++ b/PROVIDER_OFFER_SETUP.md
+@@ -71,7 +71,7 @@ In App Store Connect -> Baldwin -> Analytics -> Acquisition -> Campaigns, create
+ - `provider_referral`
+ - optionally `website`
+ 
+-Copy the Apple `pt` provider token from the generated campaign link. In the Cloudflare Pages project serving `getbaldwin.app`, configure:
++Copy the Apple `pt` provider token from the generated campaign link. On the `baldwin-getbaldwin` Worker serving `getbaldwin.app`, configure:
+ 
+ - `APP_STORE_PROVIDER_TOKEN` = Apple `pt`
+ - `APP_STORE_PROVIDER_CAMPAIGN_TOKEN` = provider-referral `ct`
+diff --git a/README.md b/README.md
+index 910ea64..bde2939 100644
+--- a/README.md
++++ b/README.md
+@@ -6,7 +6,7 @@ Monorepo for Baldwin's public growth/acquisition web stack.
+ 
+ | Directory | Cloudflare target | Production surface |
+ |---|---|---|
+-| `getbaldwin-pages/` | Pages project + `/download` Function | `getbaldwin.app` (product site + tracked App Store/offer handoff) |
++| `getbaldwin-pages/` | Worker `baldwin-getbaldwin` + Static Assets | `getbaldwin.app` (product site + tracked App Store/offer handoff) |
+ | `trackmyhairloss-pages/` | Pages project | `trackmyhairloss.com` (tools, provider acquisition, provider kit, ops) |
+ | `trybaldwin-pages/` | Pages project | `trybaldwin.app` patient referral landing |
+ | `content-worker/` | Worker `trackmyhairloss-content` | Dynamic `/blog`, `/compare`, `/treatments`, sitemap/feed/llms routes |
+@@ -19,22 +19,21 @@ The current Google Analytics tag is `G-6FX9XXF3JK`.
+ Use this same GitHub repository for all five Cloudflare applications.
+ 
+ 
+-### GetBaldwin Pages
++### GetBaldwin Worker
+ 
+-Create/connect a Pages project for the product site:
++Deploy the product site through the existing `baldwin-getbaldwin` Worker:
+ 
+ - Production branch: `main`
+ - Root directory: `getbaldwin-pages`
+-- Framework preset: None
+-- Build command: leave blank
+-- Build output directory: `.`
+-- Custom domain: `getbaldwin.app`
++- Build command: `exit 0` (or blank)
++- Deploy command: `npx wrangler deploy`
++- Static asset root: `getbaldwin-pages/public` (configured in `wrangler.jsonc`)
+ - Optional env: `GROWTH_API_URL=https://baldwin-growth-api.threeamigosholdings.workers.dev`
+ - Env: `APP_STORE_PROVIDER_TOKEN=<App Store campaign pt token>`
+ - Env: `APP_STORE_PROVIDER_CAMPAIGN_TOKEN=provider_referral`
+ - Optional env: `APP_STORE_WEBSITE_CAMPAIGN_TOKEN=website`
+ 
+-The Pages Function at `/download` records the handoff server-side. Valid provider referrals with an Apple custom offer code are redirected to Apple's prefilled offer-code redemption flow; all failures fall open to the normal App Store listing.
++The Worker entrypoint routes `/download` into the existing referral/offer handoff implementation. Valid provider referrals with an Apple custom offer code are redirected to Apple's prefilled offer-code redemption flow; all failures fall open to the normal App Store listing. Static files are served by Workers Static Assets from `public/`, so dependencies and Worker source are never uploaded as public assets.
+ 
+ ### TrackMyHairLoss Pages
+ 
+@@ -173,4 +172,4 @@ After Resend is configured, run `scripts/setup-gtm-integrations.sh` to finish In
+ 
+ ## getbaldwin.app
+ 
+-The deployable `getbaldwin.app` Pages project lives in `getbaldwin-pages/`. See `getbaldwin-pages/HANDOFF.md` for its Growth Worker contract, required Pages variables, local verification, and Cloudflare deployment settings.
++The deployable `getbaldwin.app` Worker lives in `getbaldwin-pages/`. See `getbaldwin-pages/HANDOFF.md` for its Growth Worker contract, required Worker variables, local verification, and Cloudflare deployment settings.
+diff --git a/TONIGHT.md b/TONIGHT.md
+index c822ab0..139f585 100644
+--- a/TONIGHT.md
++++ b/TONIGHT.md
+@@ -45,11 +45,11 @@ New surfaces:
+ 
+ The existing free tools remain live and attribution-aware.
+ 
+-## 3. Deploy GetBaldwin Pages
++## 3. Deploy GetBaldwin Worker
+ 
+-Cloudflare Pages root: `getbaldwin-pages/`. Move the existing `getbaldwin.app` custom domain to this Git-connected project after validating its `*.pages.dev` deployment. The `/download` Pages Function records the server-side handoff and redirects valid provider referrals to Apple offer-code redemption.
++Cloudflare Worker root: `getbaldwin-pages/`. Deploy the existing `baldwin-getbaldwin` Worker with `npx wrangler deploy` and validate its `*.workers.dev` deployment first. Static assets come only from `getbaldwin-pages/public/`; `/download` is handled by the Worker adapter and reuses the existing referral/offer handoff logic. After validation, move `getbaldwin.app` to this Worker.
+ 
+-Before moving the custom domain, configure these Pages variables:
++Before moving the custom domain, configure these Worker variables:
+ 
+ - `APP_STORE_PROVIDER_TOKEN` — the `pt` value from any Baldwin App Store Connect campaign link
+ - `APP_STORE_PROVIDER_CAMPAIGN_TOKEN` — the `ct` value from the provider-referral campaign
+diff --git a/getbaldwin-pages/HANDOFF.md b/getbaldwin-pages/HANDOFF.md
+index 2d6451d..62c541a 100644
+--- a/getbaldwin-pages/HANDOFF.md
++++ b/getbaldwin-pages/HANDOFF.md
+@@ -1,12 +1,12 @@
+ # getbaldwin.app handoff
+ 
+-This directory is the deployable Cloudflare Pages project for `getbaldwin.app`.
++This directory is the deployable Cloudflare Worker for `getbaldwin.app`. It uses Workers Static Assets for the hybrid Baldwin marketing site and a Worker route for `/download`.
+ 
+ ## What it owns
+ 
+-- The public Baldwin marketing homepage.
+-- Browser-side acquisition events via `assets/growth.js`.
+-- `/download` as a Pages Function (`functions/download.js`).
++- The public Baldwin marketing homepage in `public/`.
++- Browser-side acquisition events via `public/assets/growth.js`.
++- `/download`, routed by `src/index.js` into the existing referral/offer implementation in `functions/download.js`.
+ - Provider lookup before the App Store handoff.
+ - Provider custom-offer redemption when the Growth API reports an Apple offer code.
+ - App Store Campaign `pt` / `ct` tagging when configured.
+@@ -22,11 +22,11 @@ It does **not** own provider records, attribution state, or Apple offer provisio
+ 
+ The provider response may contain `appleOfferCode` and `offerVariant`. If a valid active provider has an Apple offer code, `/download` redirects to Apple's prefilled offer-code redemption URL. Otherwise it fails open to Baldwin's normal App Store listing.
+ 
+-Tracked web/handoff events include `landing_view`, `download_click`, `app_store_redirect`, and `provider_offer_redirect`. Later app events (`app_signup`, `baseline_complete`, `second_session`, `subscription_started`) are sent by the app/backend, not this Pages project.
++Tracked web/handoff events include `landing_view`, `download_click`, `app_store_redirect`, and `provider_offer_redirect`. Later app events (`app_signup`, `baseline_complete`, `second_session`, `subscription_started`) are sent by the app/backend, not this Worker.
+ 
+-## Required Pages variables
++## Required Worker variables
+ 
+-Set these for Production (and preferably Preview):
++Set these on the `baldwin-getbaldwin` Worker:
+ 
+ - `GROWTH_API_URL=https://baldwin-growth-api.threeamigosholdings.workers.dev`
+ - `APP_STORE_PROVIDER_TOKEN=<Apple provider token / pt>`
+@@ -35,44 +35,46 @@ Set these for Production (and preferably Preview):
+ 
+ If the Apple campaign variables are absent or invalid, downloads still work; the `pt`/`ct` tags are simply omitted.
+ 
++## Why `public/` exists
++
++`wrangler.jsonc` points Workers Static Assets only at `./public`. Dependencies, tests, `functions/`, Worker source, and `node_modules/` are therefore never uploaded as website assets. This avoids the prior `workerd` >25 MiB static-asset deployment failure.
++
++`public/_headers` is supported by Workers Static Assets and applies the existing security/cache headers to static responses. `/download` is generated by Worker code, so `src/index.js` adds the security headers directly to its redirect response.
++
+ ## Local verification
+ 
+ From the repository root:
+ 
+ ```bash
+ cd worker && npm test
+-cd ../getbaldwin-pages && npm test
++cd ../getbaldwin-pages && npm install && npm test
+ ```
+ 
+-To exercise Pages Functions locally:
++Local Worker development:
+ 
+ ```bash
+-npx wrangler@latest pages dev getbaldwin-pages
++cd getbaldwin-pages
++npm run dev
+ ```
+ 
+-## Cloudflare Pages Git deployment
+-
+-Create/select a Pages project connected to this monorepo with:
+-
+-- Production branch: `main`
+-- Root directory: `getbaldwin-pages`
+-- Framework preset: None
+-- Build command: `exit 0`
+-- Build output directory: `.`
++Dry-run packaging check:
+ 
+-Then configure the four variables above and attach `getbaldwin.app` under Custom domains.
++```bash
++npm run deploy:dry
++```
+ 
+-Because this project contains a `functions/` directory, deploy through Git integration or Wrangler; do not use a static-only dashboard upload.
++## Cloudflare Git deployment
+ 
+-## CLI deployment
++Use the existing Worker project:
+ 
+-If the Pages project already exists:
++- Worker name: `baldwin-getbaldwin`
++- Root directory: `getbaldwin-pages`
++- Build command: `exit 0` (or leave blank if Cloudflare allows it)
++- Deploy command: `npx wrangler deploy`
+ 
+-```bash
+-npx wrangler@latest pages deploy getbaldwin-pages --project-name <YOUR_PAGES_PROJECT_NAME> --branch main
+-```
++Do not use `wrangler pages deploy` for this directory anymore. `wrangler.jsonc` sets `keep_vars: true` so variables already configured on the Worker dashboard are preserved during Git/Wrangler deployments; encrypted Worker secrets are preserved by Wrangler as well.
+ 
+-Configure production variables in the Cloudflare dashboard before relying on provider offers/campaign tags.
++The Worker continues to be available at its `workers.dev` hostname. Attach `getbaldwin.app` to this Worker in Cloudflare after validating the preview deployment. Domain routing is intentionally not hard-coded in `wrangler.jsonc`, so deploying this patch does not unexpectedly take the domain away from an existing Pages project.
+ 
+ ## Provider offer dependency
+ 
+diff --git a/getbaldwin-pages/package.json b/getbaldwin-pages/package.json
+index b8196fa..d63968c 100644
+--- a/getbaldwin-pages/package.json
++++ b/getbaldwin-pages/package.json
+@@ -2,6 +2,12 @@
+   "private": true,
+   "type": "module",
+   "scripts": {
+-    "test": "node --test test/*.test.js"
++    "test": "node --test test/*.test.js",
++    "dev": "wrangler dev",
++    "deploy": "wrangler deploy",
++    "deploy:dry": "wrangler deploy --dry-run --outdir .wrangler-dry-run"
++  },
++  "devDependencies": {
++    "wrangler": "4.131.2"
+   }
+ }
+diff --git a/getbaldwin-pages/_headers b/getbaldwin-pages/public/_headers
+similarity index 100%
+rename from getbaldwin-pages/_headers
+rename to getbaldwin-pages/public/_headers
+diff --git a/getbaldwin-pages/assets/baldwin.svg b/getbaldwin-pages/public/assets/baldwin.svg
+similarity index 100%
+rename from getbaldwin-pages/assets/baldwin.svg
+rename to getbaldwin-pages/public/assets/baldwin.svg
+diff --git a/getbaldwin-pages/assets/base.css b/getbaldwin-pages/public/assets/base.css
+similarity index 100%
+rename from getbaldwin-pages/assets/base.css
+rename to getbaldwin-pages/public/assets/base.css
+diff --git a/getbaldwin-pages/assets/growth.js b/getbaldwin-pages/public/assets/growth.js
+similarity index 100%
+rename from getbaldwin-pages/assets/growth.js
+rename to getbaldwin-pages/public/assets/growth.js
+diff --git a/getbaldwin-pages/index.html b/getbaldwin-pages/public/index.html
+similarity index 100%
+rename from getbaldwin-pages/index.html
+rename to getbaldwin-pages/public/index.html
+diff --git a/getbaldwin-pages/robots.txt b/getbaldwin-pages/public/robots.txt
+similarity index 100%
+rename from getbaldwin-pages/robots.txt
+rename to getbaldwin-pages/public/robots.txt
+diff --git a/getbaldwin-pages/sitemap.xml b/getbaldwin-pages/public/sitemap.xml
+similarity index 100%
+rename from getbaldwin-pages/sitemap.xml
+rename to getbaldwin-pages/public/sitemap.xml
+diff --git a/getbaldwin-pages/src/index.js b/getbaldwin-pages/src/index.js
+new file mode 100644
+index 0000000..a9aa6a8
+--- /dev/null
++++ b/getbaldwin-pages/src/index.js
+@@ -0,0 +1,37 @@
++import { onRequest as handleDownload } from '../functions/download.js';
++
++const SECURITY_HEADERS = {
++  'X-Content-Type-Options': 'nosniff',
++  'Referrer-Policy': 'strict-origin-when-cross-origin',
++  'X-Frame-Options': 'DENY',
++  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
++};
++
++function withSecurityHeaders(response) {
++  const headers = new Headers(response.headers);
++  for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value);
++  return new Response(response.body, {
++    status: response.status,
++    statusText: response.statusText,
++    headers,
++  });
++}
++
++export default {
++  async fetch(request, env, ctx) {
++    const url = new URL(request.url);
++
++    if (url.pathname === '/download' || url.pathname === '/download/') {
++      const response = await handleDownload({
++        request,
++        env,
++        waitUntil(promise) {
++          ctx.waitUntil(promise);
++        },
++      });
++      return withSecurityHeaders(response);
++    }
++
++    return env.ASSETS.fetch(request);
++  },
++};
+diff --git a/getbaldwin-pages/test/worker.test.js b/getbaldwin-pages/test/worker.test.js
+new file mode 100644
+index 0000000..cd38a5e
+--- /dev/null
++++ b/getbaldwin-pages/test/worker.test.js
+@@ -0,0 +1,50 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import worker from '../src/index.js';
++
++test('non-download requests fall through to the static asset binding', async () => {
++  let seen;
++  const env = {
++    ASSETS: {
++      async fetch(request) {
++        seen = request.url;
++        return new Response('asset', { status: 200 });
++      },
++    },
++  };
++  const response = await worker.fetch(
++    new Request('https://getbaldwin.app/assets/base.css'),
++    env,
++    { waitUntil() {} },
++  );
++  assert.equal(await response.text(), 'asset');
++  assert.equal(seen, 'https://getbaldwin.app/assets/base.css');
++});
++
++test('/download reuses the existing referral handoff and fails open to App Store', async () => {
++  const originalFetch = globalThis.fetch;
++  const pending = [];
++  globalThis.fetch = async (input, init = {}) => {
++    const url = String(input);
++    if (url.includes('/v1/providers/')) return new Response('not found', { status: 404 });
++    if (url.endsWith('/v1/events') && init.method === 'POST') return new Response('', { status: 202 });
++    throw new Error(`unexpected fetch: ${url}`);
++  };
++  try {
++    const env = {
++      ASSETS: { async fetch() { throw new Error('asset binding should not handle /download'); } },
++      GROWTH_API_URL: 'https://growth.example',
++    };
++    const response = await worker.fetch(
++      new Request('https://getbaldwin.app/download?c=website_hero&utm_source=getbaldwin'),
++      env,
++      { waitUntil(promise) { pending.push(promise); } },
++    );
++    assert.equal(response.status, 302);
++    assert.match(response.headers.get('location'), /apps\.apple\.com\/us\/app\/baldwin-hair-loss-growth-ai\/id6760326527/);
++    assert.equal(response.headers.get('x-frame-options'), 'DENY');
++    await Promise.allSettled(pending);
++  } finally {
++    globalThis.fetch = originalFetch;
++  }
++});
+diff --git a/getbaldwin-pages/wrangler.jsonc b/getbaldwin-pages/wrangler.jsonc
+new file mode 100644
+index 0000000..e89508d
+--- /dev/null
++++ b/getbaldwin-pages/wrangler.jsonc
+@@ -0,0 +1,18 @@
++{
++  "name": "baldwin-getbaldwin",
++  "main": "./src/index.js",
++  "compatibility_date": "2026-09-14",
++  "workers_dev": true,
++  "keep_vars": true,
++  "observability": {
++    "enabled": true
++  },
++  "assets": {
++    "directory": "./public",
++    "binding": "ASSETS",
++    "run_worker_first": [
++      "/download",
++      "/download/*"
++    ]
++  }
++}
