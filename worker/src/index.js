@@ -149,7 +149,7 @@ function replyAddress(env, outreachId) {
 
 function outreachCopy(outreach) {
   const subject = 'A simpler way for patients to track hair progress';
-  const body = `Hi ${outreach.practice_name} team —\n\nI built Baldwin, an iPhone app that gives hair-loss patients a consistent way to photograph and compare their progress between visits.\n\nI’m opening a small free pilot for independent hair-restoration practices. There’s no software for staff to learn: patients scan a practice-specific QR code at checkout, capture a baseline, and Baldwin handles the follow-up.\n\nWould you be open to a 10-minute look this week?\n\nBest,\nShaun\nBaldwin\nhttps://trackmyhairloss.com/providers/`;
+  const body = `Hi ${outreach.practice_name} team —\n\nI built Baldwin, an iPhone app that gives hair-loss patients a consistent way to photograph and compare their progress between visits.\n\nI’m opening a small free pilot for independent hair-restoration practices. There’s no software for staff to learn: patients scan a practice-specific QR code at checkout, capture a baseline, and Baldwin handles the follow-up.\n\nWould you be open to a 10-minute look this week?\n\nBest,\nSean\nBaldwin\nhttps://trackmyhairloss.com/providers/`;
   return { subject, body };
 }
 
@@ -332,7 +332,7 @@ There is no clinic login or patient upload workflow. Patients scan your link, ta
 If you would prefer physical cards for the front desk, reply with the best mailing address and I’ll send a small starter stack at no cost.
 
 Best,
-Shaun
+Sean
 Baldwin
 https://trybaldwin.app/`;
   return { subject, body, referralUrl, kitUrl };
