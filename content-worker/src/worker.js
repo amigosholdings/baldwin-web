@@ -35,28 +35,42 @@ async function enqueueOperatorJob(request, env, mode) {
     : {};
   const id = crypto.randomUUID();
   const requestedAt = new Date().toISOString();
-  const details = JSON.stringify({ requested_at: requestedAt, payload });
+  const initialDetails = { requested_at: requestedAt, payload };
 
   await env.DB.prepare(
     `INSERT INTO content_runs (id,mode,stage,status,details_json) VALUES (?,?,?,?,?)`
-  ).bind(id, mode, 'queued', 'queued', details).run();
+  ).bind(id, mode, 'queued', 'queued', JSON.stringify(initialDetails)).run();
 
   let dispatch = 'cron_fallback';
+  let dispatchError = null;
   if (env.CONTENT_JOBS?.send) {
     try {
       await env.CONTENT_JOBS.send({ version: 1, jobId: id, mode, requestedAt });
       dispatch = 'queue';
     } catch (error) {
-      console.error('content_queue_send_failed', error?.stack || error?.message || String(error));
+      dispatchError = error?.message || String(error);
+      console.error('content_queue_send_failed', error?.stack || dispatchError);
     }
   }
+
+  const dispatchedAt = dispatch === 'queue' ? new Date().toISOString() : null;
+  const details = {
+    ...initialDetails,
+    dispatch,
+    dispatched_at: dispatchedAt,
+    ...(dispatchError ? { dispatch_error: dispatchError } : {})
+  };
+  // Only change the stage while the job is still waiting. A very fast queue
+  // consumer may already have claimed it and moved status to running.
+  await env.DB.prepare(`UPDATE content_runs SET stage=?, details_json=? WHERE id=? AND status='queued'`)
+    .bind(dispatch === 'queue' ? 'dispatched' : 'queued', JSON.stringify(details), id).run();
 
   return Response.json({
     ok: true,
     started: dispatch === 'queue',
     queued: true,
     dispatch,
-    job: { id, mode, status: 'queued' }
+    job: { id, mode, status: 'queued', stage: dispatch === 'queue' ? 'dispatched' : 'queued' }
   }, { status: 202 });
 }
 
