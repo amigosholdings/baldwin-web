@@ -677,24 +677,39 @@ async function research(env, candidate) {
   if (candidate.safety_tier !== 'medical') return [];
   const collected = [];
   const queries = [...new Set((candidate.research_queries || []).filter(Boolean))].slice(0,3);
-  for (const q of queries) {
-    let epmc = [];
-    try {
-      epmc = await europePmcSources(q, 6);
-      collected.push(...epmc);
-    } catch (e) {
-      console.log('europe_pmc_error', q, String(e));
-    }
-    // NCBI is redundant. Prefer calling it when Europe PMC is thin or an API key is configured.
-    if (epmc.length < 3 || env.NCBI_API_KEY) {
+  const drugTerms = (candidate.drug_terms || []).slice(0,4);
+
+  // Europe PMC queries and FDA label lookups are independent network I/O, so
+  // run them together. This keeps the same source set and ranking logic while
+  // removing avoidable serial latency before the writer starts.
+  const [epmcResults, fdaResults] = await Promise.all([
+    Promise.all(queries.map(async q => {
+      try { return await europePmcSources(q, 6); }
+      catch (e) { console.log('europe_pmc_error', q, String(e)); return []; }
+    })),
+    Promise.all(drugTerms.map(term => fdaSource(term)))
+  ]);
+
+  for (const rows of epmcResults) collected.push(...rows);
+  for (const source of fdaResults) if (source) collected.push(source);
+
+  // NCBI is redundant. With an API key we can safely parallelize fallbacks;
+  // without one, preserve the existing serial pacing to avoid E-utilities
+  // rate limits while still benefiting from parallel Europe PMC/FDA work.
+  const ncbiQueries = queries.filter((q, i) => epmcResults[i].length < 3 || env.NCBI_API_KEY);
+  if (env.NCBI_API_KEY) {
+    const ncbiResults = await Promise.all(ncbiQueries.map(async q => {
+      try { return await pubmedSources(q, env, 5); }
+      catch (e) { console.log('pubmed_error', q, String(e)); return []; }
+    }));
+    for (const rows of ncbiResults) collected.push(...rows);
+  } else {
+    for (const q of ncbiQueries) {
       try { collected.push(...await pubmedSources(q, env, 5)); }
       catch (e) { console.log('pubmed_error', q, String(e)); }
     }
   }
-  for (const term of (candidate.drug_terms || []).slice(0,4)) {
-    const s = await fdaSource(term);
-    if (s) collected.push(s);
-  }
+
   const seen = new Set();
   const deduped = [];
   for (const x of collected) {
