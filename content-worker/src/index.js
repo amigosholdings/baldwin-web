@@ -50,6 +50,9 @@ const HUMAN_STYLE_RULES = `Reader-facing style rules:
 - Do not stack hedges such as "typically", "usually", "often", and "generally". Use one only when the distinction matters.
 - Avoid repetitive symmetrical constructions and polished-sounding filler. Vary sentence and paragraph length naturally.
 - Do not use quantitative precision unless it is supported by supplied evidence or explicit factual input.
+- Do not use words such as "sourced", "evidence-based", "comprehensive", "landscape", "navigate", or "important limitations" as generic credibility signals.
+- Do not write category descriptions as lists of abstract nouns. Say plainly what the reader will find or learn.
+- Avoid title formulas such as "what the evidence actually shows", "everything you need to know", and "the ultimate guide".
 - If a draft sounds machine-written, rewrite it rather than commenting on the problem.`;
 
 function b64url(input) {
@@ -717,7 +720,7 @@ async function writeDraft(env, candidate, sources) {
   const system = `You are a rigorous consumer-health editor writing for TrackMyHairLoss.com. Produce original, useful, direct prose. Do not write SEO filler. The first paragraph and answer_summary should answer the target query plainly enough to stand alone in a search or AI answer. ${medical ? 'This is medical-adjacent consumer education. Every claim about efficacy, adverse effects, indications, regulatory status, comparative outcomes, or treatment timelines must be supported by one or more supplied evidence IDs in square brackets, e.g. [P1] or [F3]. Never rely on unstated medical knowledge. Never prescribe a treatment to an individual.' : 'Stay within tracking, photography, organization, and comparison methodology; do not drift into treatment efficacy or diagnosis.'}\n\n${HUMAN_STYLE_RULES}`;
   const user = `TARGET QUERY: ${candidate.target_query}\nPROPOSED ANGLE: ${candidate.suggested_title}\nCONTENT TYPE: ${candidate.content_type}\nRATIONALE: ${candidate.rationale}\n\nTOOLS YOU MAY LINK TO BY PATH:\n${TOOLS.map(t=>`${t.path} — ${t.name}: ${t.intent}`).join('\n')}\n\n${medical ? `EVIDENCE PACKET — THIS IS THE ONLY MEDICAL EVIDENCE YOU MAY USE:\n${evidenceForModel(sources)}` : ''}\n\nREQUIREMENTS:\n- 1,100-1,800 useful words unless the question is answered better with less.\n- Avoid generic introductions. Start with the answer.\n- Use descriptive H2/H3 headings that match actual reader subquestions.\n- For comparisons, include a compact HTML table near the top comparing the decision dimensions that the evidence supports. Do not force a winner.\n- Explain evidence quality/limitations when relevant.\n- Distinguish FDA-approved indications from off-label use when evidence packet allows that conclusion.\n- Do not tell a reader to start, stop, increase, decrease, combine, or switch a drug.\n- Do not create dosing instructions beyond accurately describing supplied label information when directly necessary.\n- Do not invent statistics, trial outcomes, mechanisms, side effects, timelines, citations, or expert quotes.\n- Use citation markers exactly like [P1] [F2] immediately after supported medical claims. Multiple markers are allowed.\n- Include a short section explaining what a reader could track over time if relevant.\n- Link selection is returned separately in related_tool_paths; do not write external links into body_html.\n- body_html may use only p,h2,h3,ul,ol,li,strong,em,table,thead,tbody,tr,th,td. No attributes.\n- FAQ answers must be concise and directly answer the question.\n- description <= 155 characters. dek <= 240 characters.\n- Title should be specific, natural and non-clickbait. No year suffix unless recency is intrinsically relevant.
 - Do not mention AI, an evidence packet, an editor, our methodology, our publishing process, or phrases such as 'source-grounded' in reader-facing copy. Present the information and citations directly.
-- Avoid repetitive title formulas such as 'what the evidence actually shows' unless that wording is genuinely the clearest match for the query.`;
+- Never use title formulas such as 'what the evidence actually shows', 'everything you need to know', or 'the ultimate guide'.`;
   return aiJson(env, writerSchema(), system, user, {maxTokens:7000, temperature:0.32, reasoningEffort:'high'});
 }
 
@@ -874,6 +877,28 @@ function typeLabel(t) {
   return ({tracking_guide:'Tracking guide',treatment_comparison:'Treatment comparison',treatment_profile:'Treatment evidence',question:'Explainer'})[t] || 'Field note';
 }
 
+const PUBLIC_COPY_OVERRIDES = {
+  'mature-hairline-or-receding-hairline-how-to-tell-the-difference-and-how-to-photograp': {
+    title:'Mature hairline or receding hairline?',
+    dek:'One photo may not tell you. Match the angle, lighting, and distance, then compare the same views over several months.',
+    description:'How to photograph your hairline consistently and check whether it keeps changing over time.'
+  },
+  'how-to-take-consistent-hair-progress-photos-lighting-angle-and-distance': {
+    title:'How to take consistent hair progress photos',
+    dek:'Keep the lighting, angle, distance, and hair state the same each time.',
+    description:'A practical setup for taking hair progress photos that are easier to compare.'
+  },
+  'finasteride-vs-minoxidil-for-hair-loss-what-the-evidence-actually-shows': {
+    title:'Finasteride vs. minoxidil',
+    dek:'How oral finasteride, topical minoxidil, and oral minoxidil differ in approved use, study results, and side effects.',
+    description:'Compare finasteride and minoxidil by form, approved use, study results, and reported side effects.'
+  }
+};
+
+function publicCopy(row) {
+  return row ? {...row,...(PUBLIC_COPY_OVERRIDES[row.slug]||{})} : row;
+}
+
 function pathForType(t) {
   return t==='treatment_comparison'?'/compare':t==='treatment_profile'?'/treatments':'/blog';
 }
@@ -926,7 +951,8 @@ function schemaForPage(p, canonical, sources, faq) {
 async function getPage(env, slug, contentType=null, includeDraft=false) {
   const statusClause = includeDraft ? '' : " AND status='published'";
   const sql = contentType ? `SELECT * FROM content_pages WHERE slug=? AND content_type=?${statusClause} LIMIT 1` : `SELECT * FROM content_pages WHERE slug=?${statusClause} LIMIT 1`;
-  return contentType ? env.DB.prepare(sql).bind(slug,contentType).first() : env.DB.prepare(sql).bind(slug).first();
+  const row = contentType ? await env.DB.prepare(sql).bind(slug,contentType).first() : await env.DB.prepare(sql).bind(slug).first();
+  return publicCopy(row);
 }
 
 async function renderArticle(env, slug, contentType=null, preview=false) {
@@ -965,13 +991,14 @@ async function renderArticle(env, slug, contentType=null, preview=false) {
 
 async function indexRows(env, types) {
   const placeholders = types.map(()=>'?').join(',');
-  return (await env.DB.prepare(`SELECT slug,title,dek,content_type,published_at FROM content_pages WHERE status='published' AND content_type IN (${placeholders}) ORDER BY published_at DESC LIMIT 100`).bind(...types).all()).results || [];
+  const rows = (await env.DB.prepare(`SELECT slug,title,dek,content_type,published_at FROM content_pages WHERE status='published' AND content_type IN (${placeholders}) ORDER BY published_at DESC LIMIT 100`).bind(...types).all()).results || [];
+  return rows.map(publicCopy);
 }
 
 async function recentArticlesJson(env) {
   const rows = (await env.DB.prepare(`SELECT slug,title,dek,content_type,published_at
     FROM content_pages WHERE status='published' ORDER BY published_at DESC LIMIT 6`).all()).results || [];
-  return Response.json({articles:rows.map(p=>({
+  return Response.json({articles:rows.map(publicCopy).map(p=>({
     title:p.title,
     dek:p.dek,
     content_type:p.content_type,
@@ -982,10 +1009,10 @@ async function recentArticlesJson(env) {
 
 async function renderIndex(env, kind) {
   const map = {
-    articles:{types:['tracking_guide','question','treatment_comparison','treatment_profile'],title:'Articles',h1:'Hair progress and treatment research.',dek:'Browse every published guide, explainer, treatment comparison, and treatment research page.'},
-    blog:{types:['tracking_guide','question'],title:'Guides',h1:'How to track hair progress.',dek:'Practical guides to taking consistent photos, comparing change over time, and keeping a useful record.'},
-    compare:{types:['treatment_comparison'],title:'Treatment comparisons',h1:'Compare hair-loss treatments.',dek:'Sourced comparisons of common treatments, including route, regulatory status, study results, side effects, and important limitations.'},
-    treatments:{types:['treatment_profile'],title:'Treatments',h1:'Research on common hair-loss treatments.',dek:'Treatment pages covering study results, regulatory status, side effects, practical differences, and limitations.'}
+    articles:{types:['tracking_guide','question','treatment_comparison','treatment_profile'],title:'Articles',h1:'All articles.',dek:'Photo guides, answers to common questions, and research on hair-loss treatments.'},
+    blog:{types:['tracking_guide','question'],title:'Guides',h1:'Take better progress photos.',dek:'How to keep your lighting, angle, distance, and framing consistent from one check-in to the next.'},
+    compare:{types:['treatment_comparison'],title:'Treatment comparisons',h1:'How do treatments compare?',dek:'See how hair-loss treatments differ, what studies found, and where the evidence is still thin.'},
+    treatments:{types:['treatment_profile'],title:'Treatments',h1:'Read about hair-loss treatments.',dek:'What each treatment is used for, what studies found, and which side effects have been reported.'}
   }[kind];
   const rows = await indexRows(env,map.types);
   const items = rows.map(p=>`<a class="post" href="${esc(contentPath(p))}"><time>${p.published_at?esc(new Date(p.published_at).toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'})):''}</time><div><h2>${esc(p.title)}</h2><p>${esc(p.dek)}</p></div><span class="kind">${esc(typeLabel(p.content_type))}</span></a>`).join('');
@@ -994,7 +1021,7 @@ async function renderIndex(env, kind) {
 }
 
 async function feedXml(env) {
-  const rows = (await env.DB.prepare("SELECT slug,title,description,content_type,published_at,updated_at FROM content_pages WHERE status='published' ORDER BY published_at DESC LIMIT 30").all()).results || [];
+  const rows = ((await env.DB.prepare("SELECT slug,title,description,content_type,published_at,updated_at FROM content_pages WHERE status='published' ORDER BY published_at DESC LIMIT 30").all()).results || []).map(publicCopy);
   const base = baseUrl(env);
   const items = rows.map(p=>`<entry><title>${esc(p.title)}</title><id>${esc(base+contentPath(p))}</id><link href="${esc(base+contentPath(p))}"/><updated>${esc(new Date(p.updated_at||p.published_at).toISOString())}</updated><summary>${esc(p.description)}</summary></entry>`).join('');
   const updated = rows[0] ? new Date(rows[0].updated_at||rows[0].published_at).toISOString() : new Date().toISOString();
@@ -1012,7 +1039,7 @@ async function sitemap(env) {
 }
 
 async function llmsTxt(env) {
-  const rows = (await env.DB.prepare("SELECT slug,title,description,content_type FROM content_pages WHERE status='published' ORDER BY published_at DESC LIMIT 40").all()).results || [];
+  const rows = ((await env.DB.prepare("SELECT slug,title,description,content_type FROM content_pages WHERE status='published' ORDER BY published_at DESC LIMIT 40").all()).results || []).map(publicCopy);
   const base = baseUrl(env);
   const text = `# Track My Hair Loss\n\nTrack My Hair Loss provides browser-based hair-progress tools and sourced pages about hair-loss treatments and tracking.\n\n## Tools\n${TOOLS.map(t=>`- [${t.name}](${base}${t.path}): ${t.intent}`).join('\n')}\n\n## Content\n- [Treatment comparisons](${base}/compare)\n- [Treatments](${base}/treatments)\n- [Guides](${base}/blog)\n\n## Recent pages\n${rows.map(p=>`- [${p.title}](${base}${contentPath(p)}): ${p.description}`).join('\n')}\n`;
   return new Response(text,{headers:{'content-type':'text/plain;charset=utf-8','cache-control':'public, max-age=300'}});
@@ -1046,7 +1073,7 @@ async function ingestSignals(env, payload) {
 }
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     try {
       const u = new URL(req.url);
       const path = u.pathname.replace(/\/+$/,'') || '/';
@@ -1087,7 +1114,8 @@ export default {
     if (path==='/__generate' && req.method==='POST') {
       const body = await req.json().catch(()=>({}));
       const job = await enqueueOperatorJob(env,'operator_generate',{preferredType:body.preferredType||null,brief:body.brief||''});
-      return Response.json({ok:true,queued:true,job},{status:202});
+      ctx.waitUntil(drainOperatorJobs(env).catch(e=>console.log('operator_job_error',e?.stack||String(e))));
+      return Response.json({ok:true,started:true,job},{status:202});
     }
     if (path.startsWith('/__publish/') && req.method==='POST') return Response.json(await publishDraft(env,decodeURIComponent(path.slice(11))));
     if (path==='/__signals' && req.method==='POST') return Response.json(await ingestSignals(env,await req.json()));
@@ -1095,7 +1123,8 @@ export default {
     if (path==='/__seo-analyze' && req.method==='POST') return Response.json(await analyzeSeoFeedback(env));
     if (path==='/__seo-run' && req.method==='POST') {
       const job = await enqueueOperatorJob(env,'operator_seo',{});
-      return Response.json({ok:true,queued:true,job},{status:202});
+      ctx.waitUntil(drainOperatorJobs(env).catch(e=>console.log('operator_job_error',e?.stack||String(e))));
+      return Response.json({ok:true,started:true,job},{status:202});
     }
     if (path==='/__seo-actions') {
       const rows = (await env.DB.prepare(`SELECT id,page,slug,query,action_type,score,reason,status,created_at,executed_at FROM seo_actions ORDER BY created_at DESC LIMIT 100`).all()).results || [];
