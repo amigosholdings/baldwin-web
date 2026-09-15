@@ -23,11 +23,29 @@ function jsonTextFromResult(result) {
   return null;
 }
 
-function resultHasValidJson(result) {
+function normalizeJsonResult(result) {
   const text = jsonTextFromResult(result);
-  if (text == null) return true;
-  try { JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')); return true; }
-  catch { return false; }
+  if (text == null) return { valid: true, result };
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (typeof result?.response === 'string') return { valid: true, result: { ...result, response: parsed } };
+    if (result?.choices?.[0]?.message) {
+      return {
+        valid: true,
+        result: {
+          ...result,
+          choices: result.choices.map((choice, i) => i === 0
+            ? { ...choice, message: { ...choice.message, parsed } }
+            : choice)
+        }
+      };
+    }
+    if (typeof result === 'string') return { valid: true, result: parsed };
+    return { valid: true, result };
+  } catch {
+    return { valid: false, result };
+  }
 }
 
 function withPromptOverrides(env) {
@@ -59,7 +77,9 @@ function withPromptOverrides(env) {
 
         let result = await ai.run(model, next, ...rest);
         const expectsJson = Boolean(next?.response_format && ['json_schema','json_object'].includes(next.response_format.type));
-        if (!expectsJson || resultHasValidJson(result)) return result;
+        if (!expectsJson) return result;
+        let normalized = normalizeJsonResult(result);
+        if (normalized.valid) return normalized.result;
 
         console.warn('workers_ai_invalid_json_retry', JSON.stringify({ model, preferredType, maxTokens: next.max_completion_tokens || null }));
         const retryMax = Math.min(12000, Math.max(8000, Number(next.max_completion_tokens || 5000) + 3000));
@@ -76,7 +96,26 @@ function withPromptOverrides(env) {
           ]
         };
         result = await ai.run(model, retryInput, ...rest);
-        return result;
+        normalized = normalizeJsonResult(result);
+        if (normalized.valid) return normalized.result;
+
+        console.warn('workers_ai_invalid_json_object_fallback', JSON.stringify({ model, preferredType, retryMax }));
+        const fallbackInput = {
+          ...retryInput,
+          response_format: { type: 'json_object' },
+          temperature: 0.05,
+          max_completion_tokens: 12000,
+          messages: [
+            ...retryInput.messages,
+            {
+              role: 'system',
+              content: 'FINAL JSON FALLBACK: Return the same requested data as one syntactically valid JSON object. Completeness and valid escaping are more important than prose length. Shorten long string fields if necessary rather than truncating the JSON.'
+            }
+          ]
+        };
+        result = await ai.run(model, fallbackInput, ...rest);
+        normalized = normalizeJsonResult(result);
+        return normalized.valid ? normalized.result : result;
       }
     }
   };
