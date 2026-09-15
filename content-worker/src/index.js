@@ -28,7 +28,7 @@ const TOOLS = [
 ];
 
 const ALLOWED_BODY_TAGS = new Set(['p','h2','h3','ul','ol','li','strong','em','table','thead','tbody','tr','th','td']);
-const MEDICAL_HINT = /\b(finasteride|minoxidil|dutasteride|prp|platelet|transplant|microneedl|laser|lllt|treatment|therapy|drug|medication|dose|dosing|side effect|adverse|efficacy|safety)\b/i;
+const MEDICAL_HINT = /\b(finasteride|minoxidil|dutasteride|prp|platelet|transplant|microneedl|laser|lllt|treatment|therapy|drug|medication|dose|dosing|side effect|adverse|efficacy|safety|alopecia|baldness|receding|recession|mature hairline|diagnosis|diagnose|shedding|thinning)\b/i;
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -246,16 +246,26 @@ async function recentOperatorJobs(env, limit=8) {
   return rows.map(r=>({...r,details:safeJson(r.details_json,{})}));
 }
 
-async function drainOperatorJobs(env) {
-  const job = await env.DB.prepare(`SELECT id,mode,details_json FROM content_runs
-    WHERE mode IN ('operator_generate','operator_seo') AND status='queued'
-    ORDER BY created_at ASC LIMIT 1`).first();
-  if (!job) return {ok:true,skipped:'no_operator_jobs'};
+async function recentSeoActions(env, limit=25) {
+  const rows = (await env.DB.prepare(`SELECT id,page,slug,query,action_type,score,reason,status,details_json,created_at,executed_at
+    FROM seo_actions ORDER BY created_at DESC LIMIT ?`).bind(limit).all()).results || [];
+  return rows.map(r=>({...r,details:safeJson(r.details_json,{})}));
+}
 
+async function claimOperatorJob(env, jobId=null) {
+  const job = jobId
+    ? await env.DB.prepare(`SELECT id,mode,details_json FROM content_runs
+        WHERE id=? AND mode IN ('operator_generate','operator_seo') AND status='queued' LIMIT 1`).bind(jobId).first()
+    : await env.DB.prepare(`SELECT id,mode,details_json FROM content_runs
+        WHERE mode IN ('operator_generate','operator_seo') AND status='queued'
+        ORDER BY created_at ASC LIMIT 1`).first();
+  if (!job) return null;
   const claimed = await env.DB.prepare(`UPDATE content_runs SET stage='running',status='running'
     WHERE id=? AND status='queued'`).bind(job.id).run();
-  if (!claimed?.meta?.changes) return {ok:true,skipped:'already_claimed'};
+  return claimed?.meta?.changes ? job : null;
+}
 
+async function runOperatorJob(env, job) {
   const details = safeJson(job.details_json,{});
   try {
     let result;
@@ -273,6 +283,12 @@ async function drainOperatorJobs(env) {
       .bind(JSON.stringify({...details,completed_at:nowIso(),error:error?.message||String(error)}),job.id).run();
     return {ok:false,job_id:job.id,error:error?.message||String(error)};
   }
+}
+
+async function drainOperatorJobs(env, jobId=null) {
+  const job = await claimOperatorJob(env,jobId);
+  if (!job) return {ok:true,skipped:jobId?'already_claimed':'no_operator_jobs'};
+  return runOperatorJob(env,job);
 }
 
 function decodeXml(s='') {
@@ -881,7 +897,8 @@ const PUBLIC_COPY_OVERRIDES = {
   'mature-hairline-or-receding-hairline-how-to-tell-the-difference-and-how-to-photograp': {
     title:'Mature hairline or receding hairline?',
     dek:'One photo may not tell you. Match the angle, lighting, and distance, then compare the same views over several months.',
-    description:'How to photograph your hairline consistently and check whether it keeps changing over time.'
+    description:'How to photograph your hairline consistently and check whether it keeps changing over time.',
+    answer_summary:'A single photo cannot reliably distinguish a stable hairline from ongoing change. Match the angle, lighting, distance, and hair state across several check-ins, then take the dated originals to a qualified clinician if you are concerned.'
   },
   'how-to-take-consistent-hair-progress-photos-lighting-angle-and-distance': {
     title:'How to take consistent hair progress photos',
@@ -893,6 +910,20 @@ const PUBLIC_COPY_OVERRIDES = {
     dek:'How oral finasteride, topical minoxidil, and oral minoxidil differ in approved use, study results, and side effects.',
     description:'Compare finasteride and minoxidil by form, approved use, study results, and reported side effects.'
   }
+};
+
+const PUBLIC_BODY_OVERRIDES = {
+  'mature-hairline-or-receding-hairline-how-to-tell-the-difference-and-how-to-photograp': `<p>A single photo cannot tell you why a hairline looks different. It can show position and shape, but not whether the cause is normal variation, patterned hair loss, styling, or the camera setup. A useful home check is simpler: take matched photos over several months and look for a repeatable visible change.</p>
+<h2>What matched photos can tell you</h2>
+<p>Photos can help you answer one narrow question: does the hairline look stable when the setup stays the same? They cannot diagnose the cause of a change or measure follicle density.</p>
+<table><thead><tr><th>Check</th><th>Keep consistent</th><th>Why it matters</th></tr></thead><tbody><tr><td>Position</td><td>Camera height and head angle</td><td>A small tilt can move the hairline within the frame.</td></tr><tr><td>Scale</td><td>Camera distance and lens</td><td>A closer phone changes facial proportions.</td></tr><tr><td>Contrast</td><td>Light source and exposure</td><td>Shadow can make the edge look thinner.</td></tr><tr><td>Hair state</td><td>Dryness, part, length, and product</td><td>Wet or styled hair exposes different areas of scalp.</td></tr></tbody></table>
+<h2>Set up a baseline you can repeat</h2>
+<ol><li>Choose one room and one fixed light source. Avoid changing between daylight and artificial light.</li><li>Stand in a marked position and keep the phone at eye level.</li><li>Include stable facial landmarks, such as the eyebrows and both ears, so later photos can be aligned.</li><li>Keep your hair dry and arranged the same way.</li><li>Capture a front view and both corners. Save the unedited originals.</li></ol>
+<h2>Compare a series, not a single pair</h2>
+<p>Two frames can disagree because one session was different. A sequence is more useful. If the same apparent shift appears across several well-matched check-ins, you have a clearer record to discuss with a dermatologist. If it disappears when the images are aligned, the camera setup was probably doing most of the work.</p>
+<p>Check every few months rather than every few days. Hairline photos are noisy, and frequent checking makes small changes in light or styling feel more important than they are.</p>
+<h2>Do not use photos as a diagnosis</h2>
+<p>The terms people use online for hairline shape are not a substitute for an examination. If you are concerned about a change, bring the dated originals to a qualified clinician. The value of the photo series is that it shows what changed and when, without asking memory to do the work.</p>`
 };
 
 function publicCopy(row) {
@@ -921,7 +952,9 @@ function htmlShell({title,description,canonical,body,jsonLd='',robots='index, fo
 
 function decorateCitations(html, sources) {
   const index = new Map(sources.map((s,i)=>[s.id,i+1]));
-  return String(html).replace(/\[([PF]\d+)\]/g,(m,id)=> index.has(id) ? `<sup><a class="cite" href="#ref-${esc(id)}">[${index.get(id)}]</a></sup>` : '');
+  return String(html)
+    .replace(/\[([PF]\d+)\]/g,(m,id)=> index.has(id) ? `<sup><a class="cite" href="#ref-${esc(id)}">[${index.get(id)}]</a></sup>` : '')
+    .replace(/\s+([,.;:!?])/g,'$1');
 }
 
 function schemaForPage(p, canonical, sources, faq) {
@@ -963,9 +996,12 @@ async function renderArticle(env, slug, contentType=null, preview=false) {
   const relatedMeta = safeJson(p.related_slugs_json,{tools:[],content:[]});
   const related = await selectRelated(env,p);
   const canonical = `${baseUrl(env)}${contentPath(p)}`;
-  const body = decorateCitations(p.body_html,sources);
+  const rawBody = PUBLIC_BODY_OVERRIDES[p.slug] || p.body_html;
+  const body = decorateCitations(rawBody,sources);
   const sourceHtml = sources.length ? `<section class="sources"><h2>Sources</h2>${sources.map((s,i)=>`<p class="source" id="ref-${esc(s.id)}"><strong>${String(i+1).padStart(2,'0')}</strong><span><a href="${esc(s.url)}" rel="nofollow noopener" target="_blank">${esc(s.title)}</a>${s.journal?` · ${esc(s.journal)}`:''}${s.published?` · ${esc(s.published)}`:''}</span></p>`).join('')}</section>` : '';
-  const faqHtml = faq.length ? `<section class="faq"><h2>Common questions</h2>${faq.map(x=>`<details><summary>${esc(x.q)}</summary><p>${esc(x.a)}</p></details>`).join('')}</section>` : '';
+  const bodyHasFaq = /<h[23]>\s*(?:faq|frequently asked questions|common questions)\s*<\/h[23]>/i.test(rawBody);
+  const visibleFaq = PUBLIC_BODY_OVERRIDES[p.slug] || bodyHasFaq ? [] : faq;
+  const faqHtml = visibleFaq.length ? `<section class="faq"><h2>Common questions</h2>${visibleFaq.map(x=>`<details><summary>${esc(x.q)}</summary><p>${decorateCitations(esc(x.a),sources)}</p></details>`).join('')}</section>` : '';
   const toolPaths = Array.isArray(relatedMeta.tools)?relatedMeta.tools:['/comparator/'];
   const toolHtml = toolPaths.map(path=>TOOLS.find(t=>t.path===path)).filter(Boolean).map(t=>`<a class="tool" href="${esc(t.path)}">${esc(t.name)} →</a>`).join('');
   const relatedHtml = related.map(r=>`<a class="tool" href="${esc(r.path)}">${esc(r.title)} →</a>`).join('');
@@ -978,7 +1014,7 @@ async function renderArticle(env, slug, contentType=null, preview=false) {
       <h1>${esc(p.title)}</h1>
       <p class="dek">${esc(p.dek)}</p>
       <div class="answerGrid"><div class="answerLabel">Short answer</div><div class="answerText"><p>${decorateCitations(esc(p.answer_summary),sources)}</p></div></div>
-      <div class="meta"><span>${esc(date)}</span><span>${words(p.body_html).toLocaleString()} words</span>${p.safety_tier==='medical'?`<span>${sources.length} sources</span>`:'<span>Guide</span>'}<span>Updated ${esc(modified)}</span></div>
+      <div class="meta"><span>${esc(date)}</span><span>${words(rawBody).toLocaleString()} words</span>${p.safety_tier==='medical'?`<span>${sources.length} sources</span>`:'<span>Guide</span>'}<span>Updated ${esc(modified)}</span></div>
     </div></section>
     <section><div class="wrap content"><article class="article">${body}${sourceHtml}${faqHtml}</article><aside class="aside">
       ${toolHtml?`<div class="ledger"><h3>Tools</h3>${toolHtml}</div>`:''}
@@ -1012,7 +1048,7 @@ async function renderIndex(env, kind) {
     articles:{types:['tracking_guide','question','treatment_comparison','treatment_profile'],title:'Articles',h1:'All articles.',dek:'Photo guides, answers to common questions, and research on hair-loss treatments.'},
     blog:{types:['tracking_guide','question'],title:'Guides',h1:'Take better progress photos.',dek:'How to keep your lighting, angle, distance, and framing consistent from one check-in to the next.'},
     compare:{types:['treatment_comparison'],title:'Treatment comparisons',h1:'How do treatments compare?',dek:'See how hair-loss treatments differ, what studies found, and where the evidence is still thin.'},
-    treatments:{types:['treatment_profile'],title:'Treatments',h1:'Read about hair-loss treatments.',dek:'What each treatment is used for, what studies found, and which side effects have been reported.'}
+    treatments:{types:['treatment_profile','treatment_comparison'],title:'Treatments',h1:'Hair-loss treatments.',dek:'Start with the treatment guides below. See how options differ, what studies found, and which side effects were reported.'}
   }[kind];
   const rows = await indexRows(env,map.types);
   const items = rows.map(p=>`<a class="post" href="${esc(contentPath(p))}"><time>${p.published_at?esc(new Date(p.published_at).toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'})):''}</time><div><h2>${esc(p.title)}</h2><p>${esc(p.dek)}</p></div><span class="kind">${esc(typeLabel(p.content_type))}</span></a>`).join('');
@@ -1091,7 +1127,11 @@ export default {
     if (path.startsWith('/treatments/')) return renderArticle(env,decodeURIComponent(path.slice(12)),'treatment_profile');
 
     if (path.startsWith('/__') && !adminOk(req,env)) return new Response('Unauthorized',{status:401});
-    if (path==='/__status') { const last=await env.DB.prepare("SELECT published_at FROM content_pages WHERE status='published' AND published_at IS NOT NULL ORDER BY published_at DESC LIMIT 1").first(); const lastRuns=(await env.DB.prepare("SELECT mode,stage,status,details_json,created_at FROM content_runs ORDER BY created_at DESC LIMIT 12").all()).results||[]; return Response.json({ok:true,model:MODEL,due:await due(env),auto_writer:String(env.AUTO_WRITER||'true').toLowerCase()!=='false',publish_gap_hours:MIN_PUBLISH_GAP_MS/3600000,last_published_at:last?.published_at||null,workers_ai_configured:Boolean(env.AI),indexnow_configured:Boolean(env.INDEXNOW_KEY),auto_publish_standard:env.AUTO_PUBLISH_STANDARD,auto_publish_medical:env.AUTO_PUBLISH_MEDICAL,seo_autopilot:env.SEO_AUTOPILOT,seo_refresh_medical:env.SEO_REFRESH_MEDICAL,gsc_configured:Boolean(env.GSC_SERVICE_ACCOUNT_JSON),recent_runs:lastRuns,jobs:await recentOperatorJobs(env),posts:await listAdmin(env)}); }
+    if (path==='/__status') {
+      const last=await env.DB.prepare("SELECT published_at FROM content_pages WHERE status='published' AND published_at IS NOT NULL ORDER BY published_at DESC LIMIT 1").first();
+      const lastRuns=(await env.DB.prepare("SELECT mode,stage,status,details_json,created_at FROM content_runs ORDER BY created_at DESC LIMIT 12").all()).results||[];
+      return Response.json({ok:true,model:MODEL,due:await due(env),auto_writer:String(env.AUTO_WRITER||'true').toLowerCase()!=='false',publish_gap_hours:MIN_PUBLISH_GAP_MS/3600000,last_published_at:last?.published_at||null,workers_ai_configured:Boolean(env.AI),indexnow_configured:Boolean(env.INDEXNOW_KEY),auto_publish_standard:env.AUTO_PUBLISH_STANDARD,auto_publish_medical:env.AUTO_PUBLISH_MEDICAL,seo_autopilot:env.SEO_AUTOPILOT,seo_refresh_medical:env.SEO_REFRESH_MEDICAL,gsc_configured:Boolean(env.GSC_SERVICE_ACCOUNT_JSON),recent_runs:lastRuns,jobs:await recentOperatorJobs(env),seo_actions:await recentSeoActions(env),posts:await listAdmin(env)});
+    }
     if (path==='/__ai-test' && req.method==='POST') {
       const result = await env.AI.run(MODEL, {
         messages:[{role:'user',content:'Reply with exactly the word OK.'}],
@@ -1114,8 +1154,10 @@ export default {
     if (path==='/__generate' && req.method==='POST') {
       const body = await req.json().catch(()=>({}));
       const job = await enqueueOperatorJob(env,'operator_generate',{preferredType:body.preferredType||null,brief:body.brief||''});
-      ctx.waitUntil(drainOperatorJobs(env).catch(e=>console.log('operator_job_error',e?.stack||String(e))));
-      return Response.json({ok:true,started:true,job},{status:202});
+      const claimed = await claimOperatorJob(env,job.id);
+      if (!claimed) return Response.json({ok:false,error:'job_claim_failed',job},{status:500});
+      ctx.waitUntil(runOperatorJob(env,claimed).catch(e=>console.log('operator_job_error',e?.stack||String(e))));
+      return Response.json({ok:true,started:true,job:{...job,status:'running'}},{status:202});
     }
     if (path.startsWith('/__publish/') && req.method==='POST') return Response.json(await publishDraft(env,decodeURIComponent(path.slice(11))));
     if (path==='/__signals' && req.method==='POST') return Response.json(await ingestSignals(env,await req.json()));
@@ -1123,8 +1165,10 @@ export default {
     if (path==='/__seo-analyze' && req.method==='POST') return Response.json(await analyzeSeoFeedback(env));
     if (path==='/__seo-run' && req.method==='POST') {
       const job = await enqueueOperatorJob(env,'operator_seo',{});
-      ctx.waitUntil(drainOperatorJobs(env).catch(e=>console.log('operator_job_error',e?.stack||String(e))));
-      return Response.json({ok:true,started:true,job},{status:202});
+      const claimed = await claimOperatorJob(env,job.id);
+      if (!claimed) return Response.json({ok:false,error:'job_claim_failed',job},{status:500});
+      ctx.waitUntil(runOperatorJob(env,claimed).catch(e=>console.log('operator_job_error',e?.stack||String(e))));
+      return Response.json({ok:true,started:true,job:{...job,status:'running'}},{status:202});
     }
     if (path==='/__seo-actions') {
       const rows = (await env.DB.prepare(`SELECT id,page,slug,query,action_type,score,reason,status,created_at,executed_at FROM seo_actions ORDER BY created_at DESC LIMIT 100`).all()).results || [];
