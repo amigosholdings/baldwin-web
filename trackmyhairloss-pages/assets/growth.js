@@ -6,7 +6,8 @@ window.BALDWIN_GROWTH_API=window.BALDWIN_GROWTH_API||'https://baldwin-growth-api
   let id=localStorage.getItem(anonKey);
   if(!id){id=(crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2));localStorage.setItem(anonKey,id)}
   const incomingRef=params.get('ref');
-  if(validProvider(incomingRef)) localStorage.setItem(providerKey,incomingRef);
+  const existingRef=localStorage.getItem(providerKey);
+  if(!validProvider(existingRef)&&validProvider(incomingRef)) localStorage.setItem(providerKey,incomingRef);
   const providerCode=validProvider(localStorage.getItem(providerKey))?localStorage.getItem(providerKey):null;
   const source=(params.get('utm_source')||'trackmyhairloss').slice(0,80);
   const campaign=(params.get('utm_campaign')||location.pathname).slice(0,120);
@@ -30,6 +31,7 @@ window.BALDWIN_GROWTH_API=window.BALDWIN_GROWTH_API||'https://baldwin-growth-api
       try{
         const u=new URL(a.href);
         if(providerCode&&!u.searchParams.get('ref'))u.searchParams.set('ref',providerCode);
+        if(!u.searchParams.get('aid'))u.searchParams.set('aid',id);
         if(!u.searchParams.get('utm_source'))u.searchParams.set('utm_source',source);
         if(!u.searchParams.get('utm_campaign'))u.searchParams.set('utm_campaign',campaign==='/'?'tmhl_home':campaign.replace(/^\/+|\/+$/g,'').replaceAll('/','_')||'tmhl');
         a.href=u.toString();

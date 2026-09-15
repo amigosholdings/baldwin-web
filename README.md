@@ -6,6 +6,7 @@ Monorepo for Baldwin's public growth/acquisition web stack.
 
 | Directory | Cloudflare target | Production surface |
 |---|---|---|
+| `getbaldwin-pages/` | Pages project + `/download` Function | `getbaldwin.app` (product site + tracked App Store/offer handoff) |
 | `trackmyhairloss-pages/` | Pages project | `trackmyhairloss.com` (tools, provider acquisition, provider kit, ops) |
 | `trybaldwin-pages/` | Pages project | `trybaldwin.app` patient referral landing |
 | `content-worker/` | Worker `trackmyhairloss-content` | Dynamic `/blog`, `/compare`, `/treatments`, sitemap/feed/llms routes |
@@ -15,7 +16,25 @@ The current Google Analytics tag is `G-6FX9XXF3JK`.
 
 ## Cloudflare native Git setup
 
-Use this same GitHub repository for all four Cloudflare applications.
+Use this same GitHub repository for all five Cloudflare applications.
+
+
+### GetBaldwin Pages
+
+Create/connect a Pages project for the product site:
+
+- Production branch: `main`
+- Root directory: `getbaldwin-pages`
+- Framework preset: None
+- Build command: leave blank
+- Build output directory: `.`
+- Custom domain: `getbaldwin.app`
+- Optional env: `GROWTH_API_URL=https://baldwin-growth-api.threeamigosholdings.workers.dev`
+- Env: `APP_STORE_PROVIDER_TOKEN=<App Store campaign pt token>`
+- Env: `APP_STORE_PROVIDER_CAMPAIGN_TOKEN=provider_referral`
+- Optional env: `APP_STORE_WEBSITE_CAMPAIGN_TOKEN=website`
+
+The Pages Function at `/download` records the handoff server-side. Valid provider referrals with an Apple custom offer code are redirected to Apple's prefilled offer-code redemption flow; all failures fall open to the normal App Store listing.
 
 ### TrackMyHairLoss Pages
 
@@ -69,10 +88,15 @@ On the existing `baldwin-growth-api` Worker:
 
 `ADMIN_TOKEN` remains stored as a Cloudflare Worker secret. The Growth Worker also has a Cloudflare Service Binding named `CONTENT` to `trackmyhairloss-content`, so `/ops/` can drive the content engine without exposing its admin endpoints directly to the browser.
 
+For automatic provider offer-code provisioning, also store `ASC_ISSUER_ID`, `ASC_KEY_ID`, `ASC_PRIVATE_KEY`, and `ASC_PROVIDER_OFFER_ID` as Growth Worker secrets. The existing provider form / Ops promotion flow schedules provisioning asynchronously; failed provisioning never blocks provider creation and can be retried from `/ops/`.
+
 ## Distribution surfaces
+
+- `https://getbaldwin.app/` — canonical product site; every App Store CTA routes through `/download`
 
 - `https://trackmyhairloss.com/providers/` — provider pilot landing + lead capture
 - `https://trybaldwin.app/?ref=CODE` — attributed patient referral landing
+- `https://getbaldwin.app/download?...` — authoritative download/offer handoff and server-side click event
 - `https://trackmyhairloss.com/provider-kit/?ref=CODE` — printable referral card/QR kit
 - `https://trackmyhairloss.com/ops/` — admin-token growth dashboard, email operator, and content generator
 
@@ -83,6 +107,8 @@ See `TONIGHT.md` for the launch sequence.
 Do **not** add D1 migrations to automatic Git deployments. Run migrations manually only when the schema changes.
 
 Growth API schema:
+
+For an existing database upgraded from v3, run `npm run db:migrate:v4:remote` once.
 
 ```bash
 cd worker
