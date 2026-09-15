@@ -12,6 +12,18 @@ binding = "DB"
 database_name = "baldwin-growth"
 database_id = "48fcce74-b672-40aa-8080-9a04021cd5b9"
 
+[[queues.producers]]
+binding = "CONTENT_JOBS"
+queue = "trackmyhairloss-content-jobs"
+
+[[queues.consumers]]
+queue = "trackmyhairloss-content-jobs"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 2
+max_concurrency = 1
+retry_delay = 15
+
 [vars]
 AUTO_PUBLISH_STANDARD = "true"
 AUTO_PUBLISH_MEDICAL = "true"
