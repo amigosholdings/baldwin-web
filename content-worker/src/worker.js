@@ -34,28 +34,55 @@ async function enqueueOperatorJob(request, env, mode) {
     ? { preferredType: body.preferredType || null, brief: body.brief || '' }
     : {};
   const id = crypto.randomUUID();
-  const details = JSON.stringify({ requested_at: new Date().toISOString(), payload });
+  const requestedAt = new Date().toISOString();
+  const details = JSON.stringify({ requested_at: requestedAt, payload });
 
   await env.DB.prepare(
     `INSERT INTO content_runs (id,mode,stage,status,details_json) VALUES (?,?,?,?,?)`
   ).bind(id, mode, 'queued', 'queued', details).run();
 
+  let dispatch = 'cron_fallback';
+  if (env.CONTENT_JOBS?.send) {
+    try {
+      await env.CONTENT_JOBS.send({ version: 1, jobId: id, mode, requestedAt });
+      dispatch = 'queue';
+    } catch (error) {
+      console.error('content_queue_send_failed', error?.stack || error?.message || String(error));
+    }
+  }
+
   return Response.json({
     ok: true,
-    started: false,
+    started: dispatch === 'queue',
     queued: true,
+    dispatch,
     job: { id, mode, status: 'queued' }
   }, { status: 202 });
 }
 
 async function recoverStaleOperatorJobs(env) {
-  // Cron-triggered jobs have a 15-minute wall-time limit. Anything still marked
-  // running after 16 minutes cannot be a healthy in-flight cron invocation.
+  // Queue/cron executions have a 15-minute wall-time limit. Anything still
+  // marked running after 16 minutes cannot be a healthy in-flight invocation.
   await env.DB.prepare(`UPDATE content_runs
     SET stage='queued', status='queued'
     WHERE mode IN ('operator_generate','operator_seo')
       AND status='running'
       AND created_at < datetime('now','-16 minutes')`).run();
+}
+
+async function runOneOperatorJob(env) {
+  const pending = [];
+  const capturedCtx = {
+    waitUntil(promise) { pending.push(Promise.resolve(promise)); },
+    passThroughOnException() {}
+  };
+
+  await worker.scheduled(
+    { cron: BASE_OPERATOR_CRON, scheduledTime: Date.now(), type: 'scheduled' },
+    withPromptOverrides(env),
+    capturedCtx
+  );
+  await Promise.all(pending);
 }
 
 export default {
@@ -70,13 +97,25 @@ export default {
     return worker.fetch(request, withPromptOverrides(env), ctx);
   },
 
+  async queue(batch, env) {
+    await recoverStaleOperatorJobs(env);
+    for (const message of batch.messages) {
+      try {
+        await runOneOperatorJob(env);
+        message.ack();
+      } catch (error) {
+        console.error('content_queue_consumer_failed', error?.stack || error?.message || String(error));
+        message.retry({ delaySeconds: 15 });
+      }
+    }
+  },
+
   async scheduled(controller, env, ctx) {
     const nextEnv = withPromptOverrides(env);
     if (controller?.cron === OPERATOR_CRON) {
       await recoverStaleOperatorJobs(env);
-      // index.js already contains the durable operator-job drain path keyed to
-      // the old five-minute cron string. Normalize the one-minute trigger so we
-      // can reuse that implementation without running long AI work in HTTP waitUntil().
+      // Keep the one-minute cron as a durable fallback if Queue delivery is
+      // delayed or the Queue binding is unavailable.
       return worker.scheduled({
         cron: BASE_OPERATOR_CRON,
         scheduledTime: controller.scheduledTime,
