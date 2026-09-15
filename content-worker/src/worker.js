@@ -7,6 +7,28 @@ const CONTENT_ADMIN_ORIGINS = new Set([
   'https://trackmyhairloss.com',
   'https://www.trackmyhairloss.com'
 ]);
+const CONTENT_TYPES = new Set(['tracking_guide','treatment_comparison','treatment_profile','question']);
+
+function preferredTypeFromMessages(messages = []) {
+  const text = messages.map(m => String(m?.content || '')).join('\n');
+  const match = text.match(/Preferred content type for this run:\s*(tracking_guide|treatment_comparison|treatment_profile|question)\b/i);
+  return match && CONTENT_TYPES.has(match[1].toLowerCase()) ? match[1].toLowerCase() : null;
+}
+
+function jsonTextFromResult(result) {
+  if (typeof result?.response === 'string') return result.response;
+  const content = result?.choices?.[0]?.message?.content;
+  if (typeof content === 'string') return content;
+  if (typeof result === 'string') return result;
+  return null;
+}
+
+function resultHasValidJson(result) {
+  const text = jsonTextFromResult(result);
+  if (text == null) return true;
+  try { JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')); return true; }
+  catch { return false; }
+}
 
 function withPromptOverrides(env) {
   if (!env?.AI?.run) return env;
@@ -14,11 +36,47 @@ function withPromptOverrides(env) {
   return {
     ...env,
     AI: {
-      run(model, input, ...rest) {
-        const next = input && Array.isArray(input.messages)
+      async run(model, input, ...rest) {
+        let next = input && Array.isArray(input.messages)
           ? { ...input, messages: applyContentPromptOverrides(input.messages) }
           : input;
-        return ai.run(model, next, ...rest);
+
+        const preferredType = next && Array.isArray(next.messages)
+          ? preferredTypeFromMessages(next.messages)
+          : null;
+        if (preferredType) {
+          next = {
+            ...next,
+            messages: [
+              ...next.messages,
+              {
+                role: 'system',
+                content: `Operator override: ${preferredType} is a HARD content-type constraint for this run, not a suggestion. Every proposed candidate must use content_type="${preferredType}". Do not return tracking guides, questions, or another type as a fallback. If the operator supplied a brief, satisfy that brief within ${preferredType}.`
+              }
+            ]
+          };
+        }
+
+        let result = await ai.run(model, next, ...rest);
+        const expectsJson = Boolean(next?.response_format && ['json_schema','json_object'].includes(next.response_format.type));
+        if (!expectsJson || resultHasValidJson(result)) return result;
+
+        console.warn('workers_ai_invalid_json_retry', JSON.stringify({ model, preferredType, maxTokens: next.max_completion_tokens || null }));
+        const retryMax = Math.min(12000, Math.max(8000, Number(next.max_completion_tokens || 5000) + 3000));
+        const retryInput = {
+          ...next,
+          temperature: Math.min(Number(next.temperature ?? 0.2), 0.12),
+          max_completion_tokens: retryMax,
+          messages: [
+            ...(next.messages || []),
+            {
+              role: 'system',
+              content: 'JSON RETRY: The previous response could not be parsed as JSON. Return one complete valid JSON object only. Do not use markdown fences. Escape all quotes and line breaks inside string values correctly. Do not truncate the object. Preserve the requested schema and content type.'
+            }
+          ]
+        };
+        result = await ai.run(model, retryInput, ...rest);
+        return result;
       }
     }
   };
