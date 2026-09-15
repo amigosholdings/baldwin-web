@@ -1,6 +1,8 @@
 import { GROWTH_EVENT_NAMES, activeProvider, recordGrowthEvent, upsertProviderOffer } from './growth.js';
-import { appleOfferConfigured, provisionProviderOffer } from './appleOffers.js';
+import { appleOfferConfigured, createAppleCustomCode, customOfferCodeForProvider, provisionProviderOffer } from './appleOffers.js';
 const EVENT_NAMES = GROWTH_EVENT_NAMES;
+const APP_LIFECYCLE_EVENTS = new Set(['attributed_install','attributed_open','app_signup','baseline_complete','second_session','subscription_started']);
+const OFFER_VARIANT = 'provider_50_two_months';
 
 const STAGES = new Set(['new','identified','contacted','responded','demo','pilot','active','lost']);
 const PROVIDER_STATUSES = new Set(['pilot','active','paused','lost']);
@@ -30,7 +32,7 @@ function headers(request, env, extra = {}) {
     'cache-control': 'no-store',
     'access-control-allow-origin': allowedOrigin(request, env),
     'access-control-allow-methods': 'GET,POST,PATCH,OPTIONS',
-    'access-control-allow-headers': 'content-type,x-admin-token',
+    'access-control-allow-headers': 'content-type,x-admin-token,x-app-event-secret',
     'vary': 'Origin',
     ...extra
   };
@@ -46,13 +48,6 @@ function isAdmin(request, env) {
   return Boolean(env.ADMIN_TOKEN) && token === env.ADMIN_TOKEN;
 }
 async function bodyJson(request) { try { return await request.json(); } catch { return null; } }
-function scheduleProviderOffer(ctx, env, code) {
-  if (!ctx || !appleOfferConfigured(env) || !code) return;
-  ctx.waitUntil(provisionProviderOffer(env, code).then(result => {
-    if (!result.ok && result.error !== 'offer_provision_in_progress') console.warn('provider offer provisioning failed', code, result.error);
-  }).catch(error => console.warn('provider offer provisioning failed', code, clean(error?.message, 300))));
-}
-
 async function contentService(env, path, { method = 'GET', body = null } = {}) {
   if (!env.CONTENT) throw new Error('CONTENT_service_binding_not_configured');
   const init = { method, headers: { 'x-admin-token': env.ADMIN_TOKEN } };
@@ -219,39 +214,79 @@ async function hashToken(value = '') {
   return Array.from(new Uint8Array(digest)).map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 32);
 }
 
-async function ensureProviderForLead(env, lead) {
-  let provider = await env.DB.prepare(`
-    SELECT * FROM providers
-    WHERE lower(email)=lower(?) OR lower(name)=lower(?)
-    ORDER BY CASE WHEN lower(email)=lower(?) THEN 0 ELSE 1 END
-    LIMIT 1
-  `).bind(lead.email, lead.practice_name, lead.email).first();
-  if (provider) {
-    await env.DB.prepare(`
-      UPDATE providers SET
-        contact_name=COALESCE(NULLIF(?,''),contact_name),
-        email=COALESCE(NULLIF(?,''),email),
-        phone=COALESCE(NULLIF(?,''),phone),
-        website=COALESCE(NULLIF(?,''),website),
-        city=COALESCE(NULLIF(?,''),city),
-        state=COALESCE(NULLIF(?,''),state),
-        status=CASE WHEN status IN ('paused','lost') THEN 'pilot' ELSE status END
-      WHERE id=?
-    `).bind(lead.contact_name, lead.email, lead.phone, lead.website, lead.city, lead.state, provider.id).run();
-    return env.DB.prepare('SELECT * FROM providers WHERE id=? LIMIT 1').bind(provider.id).first();
-  }
+function providerLinks(provider) {
+  return {
+    ...provider,
+    referral_url: `https://trybaldwin.app/?ref=${encodeURIComponent(provider.code)}`,
+    kit_url: `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(provider.code)}`,
+    download_url: `https://getbaldwin.app/download?c=provider_referral&ref=${encodeURIComponent(provider.code)}&utm_source=trybaldwin&utm_campaign=provider_referral`,
+    redemption_url: provider.apple_offer_code ? `https://apps.apple.com/redeem?ctx=offercodes&id=6760326527&code=${encodeURIComponent(provider.apple_offer_code)}` : null
+  };
+}
 
-  const base = slug(lead.practice_name) || `provider-${Math.random().toString(36).slice(2,8)}`;
-  let code = base;
-  for (let i = 0; i < 5 && await env.DB.prepare('SELECT 1 FROM providers WHERE code=?').bind(code).first(); i++) {
-    code = `${base}-${Math.random().toString(36).slice(2,6)}`;
+async function providerForInput(env, input, requestedCode = null) {
+  if (requestedCode) {
+    const byCode = await env.DB.prepare('SELECT * FROM providers WHERE code=? LIMIT 1').bind(requestedCode).first();
+    if (byCode) return byCode;
   }
-  const id = uuid();
-  await env.DB.prepare(`
-    INSERT INTO providers (id,code,name,website,city,state,contact_name,email,phone,status)
-    VALUES (?,?,?,?,?,?,?,?,?,'pilot')
-  `).bind(id, code, lead.practice_name, lead.website, lead.city, lead.state, lead.contact_name, lead.email, lead.phone).run();
-  return env.DB.prepare('SELECT * FROM providers WHERE id=? LIMIT 1').bind(id).first();
+  const email = extractEmailAddress(input?.email || '');
+  const name = clean(input?.name || input?.practice_name || input?.practiceName, 160);
+  if (email) {
+    const byEmail = await env.DB.prepare('SELECT * FROM providers WHERE lower(email)=lower(?) LIMIT 1').bind(email).first();
+    if (byEmail) return byEmail;
+  }
+  if (name) return env.DB.prepare('SELECT * FROM providers WHERE lower(name)=lower(?) LIMIT 1').bind(name).first();
+  return null;
+}
+
+async function uniqueProviderCode(env, preferred) {
+  const base = (slug(preferred) || `provider-${Math.random().toString(36).slice(2,8)}`).slice(0,48);
+  let code = base;
+  for (let i = 0; i < 8; i++) {
+    const row = await env.DB.prepare('SELECT 1 FROM providers WHERE code=? LIMIT 1').bind(code).first();
+    if (!row) return code;
+    code = `${base.slice(0,43)}-${Math.random().toString(36).slice(2,6)}`.slice(0,48);
+  }
+  throw new Error('provider_code_collision');
+}
+
+async function readyAppleOffer(env, code, existingOffer = null) {
+  if (existingOffer) return existingOffer;
+  if (!appleOfferConfigured(env)) throw new Error('app_store_connect_not_configured');
+  const appleOfferCode = await customOfferCodeForProvider(code);
+  const limit = Math.max(1, Math.min(25000, Number(env.PROVIDER_OFFER_REDEMPTION_LIMIT || 25000)));
+  await createAppleCustomCode(env, appleOfferCode, limit);
+  return appleOfferCode;
+}
+
+async function provisionProvider(env, input, { source = 'ops_manual', outreachId = null } = {}) {
+  const name = clean(input?.name || input?.practice_name || input?.practiceName, 160);
+  if (!name) throw new Error('name_required');
+  const requestedCode = input?.code ? slug(input.code) : null;
+  let existing = await providerForInput(env, input, requestedCode);
+  let code = existing?.code || (requestedCode ? requestedCode.slice(0,48) : null);
+  if (!existing) code = await uniqueProviderCode(env, code || name);
+
+  // Create/reconcile the Apple custom code first. If the D1 batch below fails, a retry
+  // safely reuses the deterministic Apple code (the Apple helper reconciles 409s).
+  const appleOfferCode = await readyAppleOffer(env, code, existing?.apple_offer_code || null);
+  const id = existing?.id || uuid();
+  const website = clean(input?.website, 240), city = clean(input?.city, 120), state = clean(input?.state, 80);
+  const contactName = clean(input?.contact_name || input?.contactName, 160), email = extractEmailAddress(input?.email || ''), phone = clean(input?.phone, 80);
+  const statements = [];
+  if (existing) {
+    statements.push(env.DB.prepare(`UPDATE providers SET name=?,website=COALESCE(NULLIF(?,''),website),city=COALESCE(NULLIF(?,''),city),state=COALESCE(NULLIF(?,''),state),contact_name=COALESCE(NULLIF(?,''),contact_name),email=COALESCE(NULLIF(?,''),email),phone=COALESCE(NULLIF(?,''),phone),status=CASE WHEN status IN ('paused','lost') THEN 'pilot' ELSE status END,apple_offer_code=?,offer_variant=?,offer_provision_status='ready',offer_provision_error=NULL,offer_provisioned_at=COALESCE(offer_provisioned_at,CURRENT_TIMESTAMP),offer_provision_updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .bind(name,website,city,state,contactName,email,phone,appleOfferCode,OFFER_VARIANT,id));
+  } else {
+    statements.push(env.DB.prepare(`INSERT INTO providers(id,code,name,website,city,state,contact_name,email,phone,status,apple_offer_code,offer_variant,offer_provision_status,offer_provisioned_at,offer_provision_updated_at) VALUES(?,?,?,?,?,?,?,?,?,'pilot',?,?,'ready',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`)
+      .bind(id,code,name,website,city,state,contactName,email,phone,appleOfferCode,OFFER_VARIANT));
+  }
+  if (outreachId) statements.push(env.DB.prepare(`UPDATE outreach SET stage='pilot',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(outreachId));
+  statements.push(env.DB.prepare(`INSERT INTO events(id,event_name,provider_code,source,metadata_json,idempotency_key) VALUES(?,'provider_pilot_created',?,?,?,?) ON CONFLICT(idempotency_key) DO NOTHING`)
+    .bind(uuid(),code,source,JSON.stringify({offer_variant:OFFER_VARIANT}),`provider_pilot_created:${code}`));
+  await env.DB.batch(statements);
+  const row = await env.DB.prepare('SELECT * FROM providers WHERE code=? LIMIT 1').bind(code).first();
+  return providerLinks(row);
 }
 
 async function ensureOutreachForLead(env, lead) {
@@ -566,7 +601,7 @@ async function processResendWebhook(request, env) {
 }
 
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: headers(request, env) });
     const url = new URL(request.url);
     const path = url.pathname;
@@ -582,8 +617,19 @@ export default {
 
     if (request.method === 'POST' && path === '/v1/events') {
       const body = await bodyJson(request);
-      if (!body || !EVENT_NAMES.has(body.event)) return json(request, env, { error: 'invalid_event' }, 400);
+      if (!body || !EVENT_NAMES.has(body.event) || APP_LIFECYCLE_EVENTS.has(body.event)) return json(request, env, { error: 'invalid_event' }, 400);
       const result = await recordGrowthEvent(env, body);
+      return json(request, env, result.body, result.status);
+    }
+
+    if (request.method === 'POST' && path === '/v1/internal/app-event') {
+      if (!env.APP_EVENT_SECRET || request.headers.get('x-app-event-secret') !== env.APP_EVENT_SECRET) return json(request, env, { error: 'unauthorized' }, 401);
+      const body = await bodyJson(request);
+      if (!body || !APP_LIFECYCLE_EVENTS.has(body.event)) return json(request, env, { error: 'invalid_event' }, 400);
+      // The app backend historically used anonymousId for its installation identifier.
+      // Preserve that working path while also feeding the canonical attribution engine.
+      const payload = { ...body, installationId: body.installationId || body.anonymousId || null };
+      const result = await recordGrowthEvent(env, payload);
       return json(request, env, result.body, result.status);
     }
 
@@ -619,13 +665,14 @@ export default {
         SELECT id FROM provider_leads WHERE lower(email)=lower(?) AND created_at >= datetime('now','-1 day') LIMIT 1
       `).bind(lead.email).first();
       if (duplicate) {
-        const provider = await env.DB.prepare(`SELECT * FROM providers WHERE lower(email)=lower(?) OR lower(name)=lower(?) LIMIT 1`).bind(lead.email, lead.practice_name).first();
-        if (provider?.code) scheduleProviderOffer(ctx, env, provider.code);
+        let provider = await env.DB.prepare(`SELECT * FROM providers WHERE lower(email)=lower(?) OR lower(name)=lower(?) LIMIT 1`).bind(lead.email, lead.practice_name).first();
+        try { provider = await provisionProvider(env, { ...lead, name: lead.practice_name }, { source: 'providers_form_retry' }); }
+        catch (error) { console.error('provider retry provisioning failed', clean(error?.message,300)); }
         return json(request, env, {
           ok: true,
           duplicate: true,
-          referral_url: provider ? `https://trybaldwin.app/?ref=${encodeURIComponent(provider.code)}` : null,
-          kit_url: provider ? `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(provider.code)}` : null
+          referral_url: provider?.referral_url || (provider?.code ? `https://trybaldwin.app/?ref=${encodeURIComponent(provider.code)}` : null),
+          kit_url: provider?.kit_url || (provider?.code ? `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(provider.code)}` : null)
         }, 200);
       }
 
@@ -637,22 +684,22 @@ export default {
           .bind(uuid(), sourceHash, JSON.stringify({ lead_id: leadId }))
       ]);
 
-      const provider = await ensureProviderForLead(env, lead);
-      scheduleProviderOffer(ctx, env, provider.code);
+      let provider;
+      try { provider = await provisionProvider(env, { ...lead, name: lead.practice_name }, { source: 'providers_form' }); }
+      catch (error) { console.error('provider provisioning failed', clean(error?.message,300)); return json(request, env, { error: 'pilot_provisioning_unavailable', detail: clean(error?.message,300) }, 503); }
       const outreach = await ensureOutreachForLead(env, lead);
       const copy = providerPilotCopy(lead, provider);
       let emailResult = { sent: false, suppressed: Number(outreach.do_not_contact) === 1 };
       try { emailResult = await sendProviderPilot(env, outreach, lead, provider); }
       catch (error) { console.error('provider pilot email failed', clean(error?.message,300)); }
 
-      await env.DB.prepare(`INSERT INTO events (id,event_name,provider_code,source,metadata_json) VALUES (?, 'provider_pilot_created', ?, 'providers_form', ?)`)
-        .bind(uuid(), provider.code, JSON.stringify({ lead_id: leadId, email_sent: Boolean(emailResult.sent) })).run();
-
       return json(request, env, {
         ok: true,
         provider_code: provider.code,
         referral_url: copy.referralUrl,
         kit_url: copy.kitUrl,
+        redemption_url: provider.redemption_url,
+        offer_variant: provider.offer_variant,
         email_sent: Boolean(emailResult.sent),
         email_suppressed: Boolean(emailResult.suppressed)
       }, 201);
@@ -726,16 +773,44 @@ export default {
       }
 
       if (request.method === 'POST' && path === '/v1/admin/providers') {
-        const body = await bodyJson(request);
-        if (!body?.name) return json(request, env, { error: 'name_required' }, 400);
-        let code = slug(body.code || body.name) || `provider-${Math.random().toString(36).slice(2,8)}`;
-        if (await env.DB.prepare('SELECT 1 FROM providers WHERE code=?').bind(code).first()) code = `${code}-${Math.random().toString(36).slice(2,6)}`;
-        const id = uuid();
-        await env.DB.prepare(`INSERT INTO providers (id,code,name,website,city,state,status) VALUES (?,?,?,?,?,?,'pilot')`)
-          .bind(id, code, clean(body.name,160), clean(body.website,240), clean(body.city,120), clean(body.state,80)).run();
-        scheduleProviderOffer(ctx, env, code);
-        return json(request, env, { ok: true, provider: { id, code, name: body.name, referral_url: `https://trybaldwin.app/?ref=${encodeURIComponent(code)}`, offer_status: appleOfferConfigured(env) ? 'provisioning' : 'unconfigured' } }, 201);
+        const body = await bodyJson(request) || {};
+        try {
+          const provider = await provisionProvider(env, body, { source: 'ops_manual' });
+          return json(request, env, { ok: true, provider }, 201);
+        } catch (error) {
+          return json(request, env, { error: clean(error?.message,400) }, error?.message === 'app_store_connect_not_configured' ? 503 : 400);
+        }
       }
+
+      if (request.method === 'POST' && path === '/v1/admin/outreach/import') {
+        const body = await bodyJson(request) || {};
+        const rows = Array.isArray(body.rows) ? body.rows.slice(0, 1000) : [];
+        if (!rows.length) return json(request, env, { error: 'rows_required' }, 400);
+        const results = [];
+        for (let i = 0; i < rows.length; i++) {
+          const raw = rows[i] || {};
+          const practiceName = clean(raw.practice_name || raw.practiceName || raw.name || raw.practice || raw.clinic, 160);
+          const email = extractEmailAddress(raw.email || raw.work_email || raw.contact_email || '');
+          if (!practiceName) { results.push({ row:i+1, ok:false, action:'skipped', error:'practice_name_required' }); continue; }
+          const website=clean(raw.website||raw.url,240), phone=clean(raw.phone,80), city=clean(raw.city,120), category=clean(raw.category||raw.type,100);
+          const sourceUrl=clean(raw.source_url||raw.sourceUrl||website,500), sourceType=clean(raw.source_type||raw.sourceType||'csv_import',80), notes=clean(raw.notes,1600);
+          const priorityRaw=Number(raw.priority), priority=Number.isFinite(priorityRaw)&&priorityRaw>=1&&priorityRaw<=3?Math.trunc(priorityRaw):null;
+          let existing=email?await env.DB.prepare('SELECT id FROM outreach WHERE lower(email)=lower(?) LIMIT 1').bind(email).first():null;
+          if(!existing) existing=await env.DB.prepare(`SELECT id FROM outreach WHERE lower(practice_name)=lower(?) AND lower(COALESCE(city,''))=lower(?) LIMIT 1`).bind(practiceName,city).first();
+          if(existing){
+            await env.DB.prepare(`UPDATE outreach SET practice_name=?,website=COALESCE(NULLIF(?,''),website),email=COALESCE(NULLIF(?,''),email),phone=COALESCE(NULLIF(?,''),phone),city=COALESCE(NULLIF(?,''),city),category=COALESCE(NULLIF(?,''),category),priority=COALESCE(?,priority),source_url=COALESCE(NULLIF(?,''),source_url),source_type=COALESCE(NULLIF(?,''),source_type),notes=CASE WHEN ?='' THEN notes ELSE COALESCE(notes || char(10),'') || ? END,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+              .bind(practiceName,website,email,phone,city,category,priority,sourceUrl,sourceType,notes,notes,existing.id).run();
+            results.push({row:i+1,ok:true,action:'updated',id:existing.id,practice_name:practiceName});
+          }else{
+            const id=uuid();
+            await env.DB.prepare(`INSERT INTO outreach(id,practice_name,website,email,phone,city,category,priority,source_url,source_type,stage,notes) VALUES(?,?,?,?,?,?,?,?,?,?,'identified',?)`)
+              .bind(id,practiceName,website,email,phone,city,category,priority,sourceUrl,sourceType,notes).run();
+            results.push({row:i+1,ok:true,action:'inserted',id,practice_name:practiceName});
+          }
+        }
+        return json(request, env, { ok:true, received:rows.length, inserted:results.filter(x=>x.action==='inserted').length, updated:results.filter(x=>x.action==='updated').length, skipped:results.filter(x=>!x.ok).length, results }, 201);
+      }
+
 
       if (request.method === 'POST' && path === '/v1/admin/outreach') {
         const body = await bodyJson(request);
@@ -805,19 +880,14 @@ export default {
       if (request.method === 'POST' && promoteMatch) {
         const lead = await env.DB.prepare('SELECT * FROM outreach WHERE id=? LIMIT 1').bind(promoteMatch[1]).first();
         if (!lead) return json(request, env, { error: 'not_found' }, 404);
-        let existing = await env.DB.prepare('SELECT id, code, name, website, city, state, status FROM providers WHERE lower(name)=lower(?) LIMIT 1').bind(lead.practice_name).first();
-        if (!existing) {
-          let code = slug(lead.practice_name) || `provider-${Math.random().toString(36).slice(2,8)}`;
-          if (await env.DB.prepare('SELECT 1 FROM providers WHERE code=?').bind(code).first()) code = `${code}-${Math.random().toString(36).slice(2,6)}`;
-          const id = uuid();
-          await env.DB.prepare(`INSERT INTO providers (id,code,name,website,city,email,status) VALUES (?,?,?,?,?,?,'pilot')`)
-            .bind(id, code, lead.practice_name, lead.website || '', lead.city || '', lead.email || '').run();
-          existing = { id, code, name: lead.practice_name, website: lead.website || '', city: lead.city || '', state: '', status: 'pilot' };
+        try {
+          const provider = await provisionProvider(env, { name:lead.practice_name, website:lead.website, city:lead.city, email:lead.email, phone:lead.phone }, { outreachId:lead.id, source:'ops_promote' });
+          return json(request, env, { ok:true, provider });
+        } catch (error) {
+          return json(request, env, { error:clean(error?.message,400) }, error?.message === 'app_store_connect_not_configured' ? 503 : 400);
         }
-        await env.DB.prepare(`UPDATE outreach SET stage='pilot', updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(lead.id).run();
-        scheduleProviderOffer(ctx, env, existing.code);
-        return json(request, env, { ok: true, provider: { ...existing, referral_url: `https://trybaldwin.app/?ref=${encodeURIComponent(existing.code)}`, kit_url: `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(existing.code)}`, offer_status: appleOfferConfigured(env) ? 'provisioning' : 'unconfigured' } });
       }
+
 
       const replyMatch = path.match(/^\/v1\/admin\/email\/([^/]+)\/reply$/);
       if (request.method === 'POST' && replyMatch) {

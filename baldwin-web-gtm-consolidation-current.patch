@@ -1,0 +1,642 @@
+diff --git a/GTM_PATCH_DEPLOY.md b/GTM_PATCH_DEPLOY.md
+new file mode 100644
+index 0000000..fa78062
+--- /dev/null
++++ b/GTM_PATCH_DEPLOY.md
+@@ -0,0 +1,102 @@
++# Baldwin GTM consolidation patch
++
++## Architecture after this patch
++
++`baldwin-growth-api` / D1 `baldwin-growth` remains the canonical provider registry and growth-event store.
++
++- Web/referral/download events write to Growth API.
++- `baldwin-api` should relay authenticated app lifecycle events to `POST /v1/internal/app-event` with `x-app-event-secret`.
++- The existing `attribution_subjects` first-touch logic is preserved. It can carry attribution across app events when the app supplies an installation/provider context. It does not claim to recover a provider ref from a completely vanilla fresh App Store install with no attribution context.
++- Provider offer: `provider_50_two_months` (50% off the first two monthly billing periods).
++- `getbaldwin.app/download` remains the provider offer/App Store handoff and keeps the newer Apple campaign-tag logic already present in this repo.
++
++## Provider creation
++
++The normal provider/pilot paths now synchronously provision the deterministic Apple custom offer before committing the canonical provider row. The D1 provider/outreach/event writes are then committed in one D1 batch.
++
++Because App Store Connect is external, this is not a distributed ACID transaction. The Apple code is deterministic and the existing helper reconciles Apple's duplicate-code `409`, so retrying after a D1 failure is safe.
++
++Paths using the atomic flow:
++
++- Ops **Create provider**
++- Outreach **Make pilot**
++- Public provider pilot form
++
++The existing manual/backfill offer endpoints remain available for already-created providers.
++
++## Required Growth API secrets
++
++```bash
++cd worker
++npx wrangler secret put ADMIN_TOKEN
++npx wrangler secret put APP_EVENT_SECRET
++npx wrangler secret put ASC_ISSUER_ID
++npx wrangler secret put ASC_KEY_ID
++npx wrangler secret put ASC_PRIVATE_KEY
++npx wrangler secret put ASC_PROVIDER_OFFER_ID
++```
++
++`APP_EVENT_SECRET` must match the value configured on `baldwin-api`.
++
++## App-event relay
++
++The mobile API should POST app lifecycle events to:
++
++```text
++POST https://baldwin-growth-api.threeamigosholdings.workers.dev/v1/internal/app-event
++x-app-event-secret: <shared secret>
++```
++
++Protected lifecycle events are:
++
++```text
++attributed_install
++attributed_open
++app_signup
++baseline_complete
++second_session
++subscription_started
++```
++
++These events are rejected on the public `/v1/events` route so outside callers cannot forge paid/activation conversions.
++
++## CSV provider/prospect import
++
++Open `/ops/` and use **Import CSV**. The downloadable template is at:
++
++```text
++/ops/provider-import-template.csv
++```
++
++Recognized columns include:
++
++```text
++practice_name,email,website,phone,city,category,priority,source_url,source_type,notes
++```
++
++The API accepts up to 1,000 rows per import, dedupes by email first and then practice name + city, enriches existing rows, and creates new rows at stage `identified`.
++
++## Autonomous content writer
++
++The content Worker now checks four times per day while preserving the 46-hour publication gap. When publication is due it retries several distinct topic/content-type choices instead of silently stopping after one rejected candidate. `/__status` exposes `auto_writer`, `due`, `last_published_at`, and recent run logs. Ops displays these states.
++
++Relevant vars in `content-worker/wrangler.toml`:
++
++```toml
++AUTO_WRITER = "true"
++AUTO_CONTENT_MAX_ATTEMPTS = "4"
++```
++
++## Deploy
++
++```bash
++cd worker
++npm test
++npm run deploy
++
++cd ../content-worker
++npm run check
++npm run deploy
++```
++
++Then deploy the static Pages projects using your existing Git/Cloudflare flow, including the updated `/ops/` assets.
+diff --git a/content-worker/src/index.js b/content-worker/src/index.js
+index c934516..1a11629 100644
+--- a/content-worker/src/index.js
++++ b/content-worker/src/index.js
+@@ -2,6 +2,8 @@ const MODEL = '@cf/zai-org/glm-5.3';
+ const SITE = 'https://trackmyhairloss.com';
+ const MIN_PUBLISH_GAP_MS = 46 * 60 * 60 * 1000;
+ const MAX_EXISTING_CONTEXT = 80;
++const DEFAULT_SCHEDULED_ATTEMPTS = 4;
++const SCHEDULED_TYPE_FALLBACKS = [null, 'tracking_guide', 'question', 'treatment_comparison', 'treatment_profile'];
+ 
+ // Boundaries, not exact topics. The planner decides the actual query/title each run.
+ const EDITORIAL_PILLARS = [
+@@ -413,13 +415,18 @@ async function loadEditorialContext(env) {
+     gsc = latest.map(r=>({source:'google_search_console',query:r.query,page:r.page,clicks:r.clicks,impressions:r.impressions,position:r.position,citations:0,observed_at:r.window_end,ctr:r.ctr}));
+   } catch {}
+   const signals = [...gsc,...manualSignals].slice(0,100);
+-  return { posts, signals };
++  const recentCandidates = (await env.DB.prepare(`
++    SELECT suggested_title,target_query,content_type,safety_tier,status,created_at
++    FROM topic_candidates
++    ORDER BY created_at DESC LIMIT 80
++  `).all()).results || [];
++  return { posts, signals, recentCandidates };
+ }
+ 
+ async function plan(env, preferredType=null, brief='') {
+   const context = await loadEditorialContext(env);
+   const system = `You are the managing editor and search strategist for TrackMyHairLoss.com, a useful hair-progress utility site connected to the Baldwin iPhone app. You choose what to publish; you do not write the article yet. Optimize for user satisfaction, information gain, traditional search, and citation-worthiness in AI answers. Do not create keyword permutations, doorway pages, thin listicles, or near-duplicates. Treatment topics are allowed, including direct comparisons, but must be framed as evidence-based educational comparisons rather than personalized prescribing.`;
+-  const user = `EDITORIAL TERRITORY (broad boundaries, not a topic list):\n${EDITORIAL_PILLARS.map(x=>'- '+x).join('\n')}\n\nAVAILABLE TOOLS:\n${TOOLS.map(t=>`- ${t.name} (${t.path}): ${t.intent}`).join('\n')}\n\nEXISTING/RECENT CONTENT:\n${JSON.stringify(context.posts)}\n\nSEARCH + AI VISIBILITY SIGNALS (may be empty early on):\n${JSON.stringify(context.signals)}\n\n${preferredType ? `Preferred content type for this run: ${preferredType}.` : ''}\n${brief ? `Additional editorial brief from the operator: ${brief}` : ''}\n\nGenerate EXACTLY 10 genuinely distinct candidates even if search-signal data is empty. Empty candidates are invalid. Prefer a concrete question a real user would ask. For treatment comparisons, propose neutral research queries suitable for PubMed and list drug/procedure terms separately. Mark all treatment_comparison and treatment_profile candidates safety_tier=medical. Standard tracking/process pieces are safety_tier=standard. Score each dimension 0-10. Search score should reflect plausible intent, not made-up volume. Evidence score should reflect how likely the question is to be answerable from credible primary/authoritative sources. Avoid topics substantially covered by existing content.`;
++  const user = `EDITORIAL TERRITORY (broad boundaries, not a topic list):\n${EDITORIAL_PILLARS.map(x=>'- '+x).join('\n')}\n\nAVAILABLE TOOLS:\n${TOOLS.map(t=>`- ${t.name} (${t.path}): ${t.intent}`).join('\n')}\n\nEXISTING/RECENT CONTENT:\n${JSON.stringify(context.posts)}\n\nRECENTLY PROPOSED/SELECTED/REJECTED TOPICS (do not recycle these):\n${JSON.stringify(context.recentCandidates)}\n\nSEARCH + AI VISIBILITY SIGNALS (may be empty early on):\n${JSON.stringify(context.signals)}\n\n${preferredType ? `Preferred content type for this run: ${preferredType}.` : ''}\n${brief ? `Additional editorial brief from the operator: ${brief}` : ''}\n\nGenerate EXACTLY 10 genuinely distinct candidates even if search-signal data is empty. Empty candidates are invalid. Prefer a concrete question a real user would ask. For treatment comparisons, propose neutral research queries suitable for PubMed and list drug/procedure terms separately. Mark all treatment_comparison and treatment_profile candidates safety_tier=medical. Standard tracking/process pieces are safety_tier=standard. Score each dimension 0-10. Search score should reflect plausible intent, not made-up volume. Evidence score should reflect how likely the question is to be answerable from credible primary/authoritative sources. Avoid topics substantially covered by existing content.`;
+ 
+   const attempts = [];
+   const first = await aiJson(env, plannerSchema(), system, user, {maxTokens:5200, temperature:0.35, reasoningEffort:'high'});
+@@ -735,6 +742,7 @@ async function generateOne(env, opts={}) {
+   const sources = await research(env,candidate);
+   if (candidate.safety_tier === 'medical' && sources.filter(s=>s.kind==='pubmed').length < 3) {
+     await log('research','rejected',{reason:'insufficient_pubmed_evidence',sources:publicSources(sources)});
++    await env.DB.prepare("UPDATE topic_candidates SET status='rejected', selected_at=CURRENT_TIMESTAMP WHERE target_query=? AND status='proposed'").bind(candidate.target_query).run();
+     return {ok:false,stage:'research',reason:'insufficient_pubmed_evidence',candidate,sources:publicSources(sources)};
+   }
+   await log('research','ok',{source_count:sources.length});
+@@ -761,17 +769,36 @@ async function due(env) {
+   return !last || Date.now() - Date.parse(last.published_at) >= MIN_PUBLISH_GAP_MS;
+ }
+ 
++async function scheduledSeoRun(env) {
++  const state = await env.DB.prepare("SELECT value FROM seo_state WHERE key='last_scheduled_seo_run' LIMIT 1").first();
++  if (state?.value && Date.now() - Date.parse(state.value) < 20 * 60 * 60 * 1000) return {ok:true,skipped:'not_due'};
++  const result = await runSeoFeedbackLoop(env).catch(e=>({ok:false,error:e?.message||String(e)}));
++  await env.DB.prepare("INSERT INTO seo_state(key,value,updated_at) VALUES('last_scheduled_seo_run',?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP").bind(nowIso()).run();
++  return result;
++}
++
+ async function scheduledRun(env) {
+-  // Search feedback runs every day. Content generation remains gated by the ~46h publication cadence.
+-  const seo = await runSeoFeedbackLoop(env).catch(e=>({ok:false,error:e?.message||String(e)}));
++  const seo = await scheduledSeoRun(env);
++  if (String(env.AUTO_WRITER || 'true').toLowerCase() === 'false') return {ok:true,seo,content:{skipped:'auto_writer_off'}};
+   if (!(await due(env))) return {ok:true,seo,content:{skipped:'not_due'}};
+-  let first = await generateOne(env,{mode:'scheduled'});
+-  // Medical pages default to draft. Still ship one safe standard page so the ~48h publication cadence continues.
+-  if ((!first.ok || (first.status==='draft' && first.candidate?.safety_tier==='medical')) && String(env.AUTO_PUBLISH_MEDICAL).toLowerCase()!=='true') {
+-    const second = await generateOne(env,{mode:'scheduled_fallback',preferredType:'tracking_guide'});
+-    return {ok:true,seo,medical_result:first,standard_publication:second};
++
++  const maxAttempts = clamp(env.AUTO_CONTENT_MAX_ATTEMPTS || DEFAULT_SCHEDULED_ATTEMPTS, 1, 6);
++  const attempts = [];
++  for (let i = 0; i < maxAttempts; i++) {
++    const preferredType = SCHEDULED_TYPE_FALLBACKS[i % SCHEDULED_TYPE_FALLBACKS.length];
++    try {
++      const result = await generateOne(env, {
++        mode: i === 0 ? 'scheduled' : `scheduled_retry_${i + 1}`,
++        preferredType,
++        brief: i === 0 ? '' : 'Choose a distinct publishable topic not covered by any candidate or page generated earlier in this scheduled run.'
++      });
++      attempts.push({attempt:i+1,preferredType,ok:result.ok,status:result.status||null,stage:result.stage||null,reason:result.reason||null,title:result.title||result.candidate?.suggested_title||null});
++      if (result.ok && result.status === 'published') return {ok:true,seo,content:result,attempts};
++    } catch (error) {
++      attempts.push({attempt:i+1,preferredType,ok:false,error:error?.message||String(error)});
++    }
+   }
+-  return {ok:true,seo,content:first};
++  return {ok:false,seo,content:{error:'no_publishable_article_after_retries'},attempts};
+ }
+ 
+ async function notifyIndexNow(env, paths) {
+@@ -981,7 +1008,7 @@ export default {
+     if (path.startsWith('/treatments/')) return renderArticle(env,decodeURIComponent(path.slice(12)),'treatment_profile');
+ 
+     if (path.startsWith('/__') && !adminOk(req,env)) return new Response('Unauthorized',{status:401});
+-    if (path==='/__status') return Response.json({ok:true,model:MODEL,due:await due(env),workers_ai_configured:Boolean(env.AI),indexnow_configured:Boolean(env.INDEXNOW_KEY),auto_publish_standard:env.AUTO_PUBLISH_STANDARD,auto_publish_medical:env.AUTO_PUBLISH_MEDICAL,seo_autopilot:env.SEO_AUTOPILOT,seo_refresh_medical:env.SEO_REFRESH_MEDICAL,gsc_configured:Boolean(env.GSC_SERVICE_ACCOUNT_JSON),posts:await listAdmin(env)});
++    if (path==='/__status') { const last=await env.DB.prepare("SELECT published_at FROM content_pages WHERE status='published' AND published_at IS NOT NULL ORDER BY published_at DESC LIMIT 1").first(); const lastRuns=(await env.DB.prepare("SELECT mode,stage,status,details_json,created_at FROM content_runs ORDER BY created_at DESC LIMIT 12").all()).results||[]; return Response.json({ok:true,model:MODEL,due:await due(env),auto_writer:String(env.AUTO_WRITER||'true').toLowerCase()!=='false',publish_gap_hours:MIN_PUBLISH_GAP_MS/3600000,last_published_at:last?.published_at||null,workers_ai_configured:Boolean(env.AI),indexnow_configured:Boolean(env.INDEXNOW_KEY),auto_publish_standard:env.AUTO_PUBLISH_STANDARD,auto_publish_medical:env.AUTO_PUBLISH_MEDICAL,seo_autopilot:env.SEO_AUTOPILOT,seo_refresh_medical:env.SEO_REFRESH_MEDICAL,gsc_configured:Boolean(env.GSC_SERVICE_ACCOUNT_JSON),recent_runs:lastRuns,posts:await listAdmin(env)}); }
+     if (path==='/__ai-test' && req.method==='POST') {
+       const result = await env.AI.run(MODEL, {
+         messages:[{role:'user',content:'Reply with exactly the word OK.'}],
+diff --git a/content-worker/wrangler.toml b/content-worker/wrangler.toml
+index 28d4057..e433e28 100644
+--- a/content-worker/wrangler.toml
++++ b/content-worker/wrangler.toml
+@@ -19,13 +19,15 @@ SITE_URL = "https://trackmyhairloss.com"
+ NCBI_TOOL = "trackmyhairloss"
+ NCBI_EMAIL = "threeamigosholdings@gmail.com"
+ SEO_AUTOPILOT = "true"
++AUTO_WRITER = "true"
++AUTO_CONTENT_MAX_ATTEMPTS = "4"
+ SEO_REFRESH_MEDICAL = "true"
+ GSC_SITE_URL = "sc-domain:trackmyhairloss.com"
+ GSC_LOOKBACK_DAYS = "28"
+ GSC_DATA_LAG_DAYS = "3"
+ 
+ [triggers]
+-crons = ["17 13 * * *"]
++crons = ["17 1,7,13,19 * * *"]
+ 
+ [[routes]]
+ pattern = "trackmyhairloss.com/blog*"
+diff --git a/scripts/verify-gtm-integrations.sh b/scripts/verify-gtm-integrations.sh
+index 2f3cea5..1253bc6 100755
+--- a/scripts/verify-gtm-integrations.sh
++++ b/scripts/verify-gtm-integrations.sh
+@@ -19,7 +19,7 @@ curl -fsS -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' \
+   "$GROWTH_URL/v1/admin/email/test-agent" | python3 -m json.tool
+ 
+ printf '\n==> Content configuration through service binding\n'
+-curl -fsS -H "x-admin-token: $ADMIN_TOKEN" "$GROWTH_URL/v1/admin/content/status" | python3 -c 'import json,sys; d=json.load(sys.stdin); keep=["ok","model","workers_ai_configured","indexnow_configured","gsc_configured","seo_autopilot","auto_publish_standard","auto_publish_medical"]; print(json.dumps({k:d.get(k) for k in keep}, indent=2))'
++curl -fsS -H "x-admin-token: $ADMIN_TOKEN" "$GROWTH_URL/v1/admin/content/status" | python3 -c 'import json,sys; d=json.load(sys.stdin); keep=["ok","model","auto_writer","due","publish_gap_hours","last_published_at","workers_ai_configured","indexnow_configured","gsc_configured","seo_autopilot","auto_publish_standard","auto_publish_medical"]; print(json.dumps({k:d.get(k) for k in keep}, indent=2))'
+ 
+ printf '\n==> Public IndexNow verification endpoint\n'
+ HTTP="$(curl -sS -o /tmp/baldwin-indexnow-key.txt -w '%{http_code}' https://trackmyhairloss.com/indexnow-key.txt || true)"
+diff --git a/trackmyhairloss-pages/ops/index.html b/trackmyhairloss-pages/ops/index.html
+index fd4577e..4c10d1f 100644
+--- a/trackmyhairloss-pages/ops/index.html
++++ b/trackmyhairloss-pages/ops/index.html
+@@ -74,7 +74,7 @@
+       <div class="controlbar"><div class="agentstate" id="agentState"></div><div class="btnrow"><button class="btn smallbtn" id="testEmail">Send test</button><button class="btn smallbtn" id="testAgent">Test agent</button><button class="btn smallbtn signal2" id="send5">Send next 5 P1</button><button class="btn smallbtn" id="send10">Send next 10 P1</button><a class="btn smallbtn" id="export" href="#">Export CSV</a></div></div>
+       <div class="setup hidden" id="setup"></div>
+ 
+-      <div class="panel" id="contentPanel"><div class="panelhead"><div><h2>Search & content</h2><p>Generate one useful search page on demand. Standard pages can auto-publish after the editor pass; medical pages stay drafts unless explicitly published.</p></div><div class="mono" id="contentCount"></div></div>
++      <div class="panel" id="contentPanel"><div class="panelhead"><div><h2>Search & content</h2><p>The content worker writes and publishes on its own when the cadence is due. Use these controls only for an on-demand run or SEO check.</p></div><div class="mono" id="contentCount"></div></div>
+         <div class="contentcontrols"><select id="contentType"><option value="">Auto-pick best topic</option><option value="tracking_guide">Tracking guide</option><option value="question">Explainer / question</option><option value="treatment_comparison">Treatment comparison</option><option value="treatment_profile">Treatment profile</option></select><input id="contentBrief" placeholder="Optional topic or search query (leave blank for planner)"><button class="btn smallbtn signal2" id="generateArticle">Generate article</button><button class="btn smallbtn" id="runSeo">Run SEO feedback</button></div>
+         <div class="contentstate" id="contentState"></div><div class="setup hidden" id="contentSetup"></div>
+         <div class="tablewrap" style="max-height:430px"><table><thead><tr><th>Article</th><th>Type</th><th>Safety</th><th>Status</th><th>Editor</th><th>Published</th><th>Action</th></tr></thead><tbody id="contentRows"></tbody></table></div>
+@@ -82,9 +82,9 @@
+ 
+       <div class="panel"><div class="panelhead"><div><h2>Reply inbox</h2><p>The agent classifies incoming clinic replies and drafts a response. Nothing is auto-sent.</p></div><div class="mono" id="replyCount"></div></div><div class="inbox" id="replyInbox"></div></div>
+ 
+-      <div class="panel"><div class="panelhead"><div><h2>Outreach</h2><p>Start with Priority 1. The send controls refuse duplicates and suppressed contacts.</p></div><div class="filters"><input id="search" placeholder="Search practice, city, email"><select id="priorityFilter"><option value="">All priorities</option><option value="1">P1</option><option value="2">P2</option><option value="3">P3</option></select><select id="stageFilter"><option value="">All stages</option><option>identified</option><option>contacted</option><option>responded</option><option>demo</option><option>pilot</option><option>active</option><option>lost</option></select></div></div><div class="tablewrap"><table><thead><tr><th>P</th><th>Practice</th><th>City</th><th>Email</th><th>Email state</th><th>Stage</th><th>Action</th></tr></thead><tbody id="outreachRows"></tbody></table></div></div>
++      <div class="panel"><div class="panelhead"><div><h2>Outreach</h2><p>Start with Priority 1. Import additional practices from CSV; the send controls refuse duplicates and suppressed contacts.</p></div><div class="filters"><input id="search" placeholder="Search practice, city, email"><button class="btn smallbtn" id="importCsv">Import CSV</button><a class="btn smallbtn" href="provider-import-template.csv" download>CSV template</a><input id="csvFile" type="file" accept=".csv,text/csv" class="hidden"><select id="priorityFilter"><option value="">All priorities</option><option value="1">P1</option><option value="2">P2</option><option value="3">P3</option></select><select id="stageFilter"><option value="">All stages</option><option>identified</option><option>contacted</option><option>responded</option><option>demo</option><option>pilot</option><option>active</option><option>lost</option></select></div></div><div class="tablewrap"><table><thead><tr><th>P</th><th>Practice</th><th>City</th><th>Email</th><th>Email state</th><th>Stage</th><th>Action</th></tr></thead><tbody id="outreachRows"></tbody></table></div></div>
+ 
+-      <div class="panel"><div class="panelhead"><div><h2>Provider funnel</h2><p>Once a prospect becomes a pilot, their referral link is on trybaldwin.app.</p></div><button class="btn smallbtn" id="newProvider">Create provider</button></div><div class="tablewrap"><table><thead><tr><th>Practice</th><th>Status</th><th>Offer</th><th>Views</th><th>Downloads</th><th>Apple redirects</th><th>Offer opens</th><th>Signups</th><th>Baselines</th><th>2nd sessions</th><th>Paid</th><th>Links</th></tr></thead><tbody id="providerRows"></tbody></table></div></div>
++      <div class="panel"><div class="panelhead"><div><h2>Provider funnel</h2><p>The Growth API is the canonical provider registry. New pilots provision the 50%-off-for-2-months Apple offer synchronously.</p></div><button class="btn smallbtn" id="newProvider">Create provider</button></div><div class="tablewrap"><table><thead><tr><th>Practice</th><th>Status</th><th>Offer</th><th>Views</th><th>Downloads</th><th>Apple redirects</th><th>Offer opens</th><th>Signups</th><th>Baselines</th><th>2nd sessions</th><th>Paid</th><th>Links</th></tr></thead><tbody id="providerRows"></tbody></table></div></div>
+ 
+       <div class="panel"><div class="panelhead"><div><h2>Inbound provider leads</h2><p>Leads submitted from the public provider page.</p></div></div><div class="tablewrap"><table><thead><tr><th>Practice</th><th>Contact</th><th>Email</th><th>City</th><th>Stage</th></tr></thead><tbody id="leadRows"></tbody></table></div></div>
+     </div></div></section>
+@@ -111,9 +111,22 @@ function filteredOutreach(){const q=$('search').value.trim().toLowerCase(),p=$('
+ function renderOutreach(){const rows=filteredOutreach();$('outreachRows').innerHTML=rows.length?rows.map(o=>`<tr><td class="mono">${esc(o.priority||'—')}</td><td><b>${esc(o.practice_name)}</b>${o.website?`<a class="muted website" target="_blank" href="${esc(o.website)}">${esc(o.website)}</a>`:''}</td><td>${esc(o.city||'')}</td><td>${esc(o.email||'')}</td><td>${emailState(o)}${o.reply_category?`<br><span class="badge ${esc(o.reply_category)}" style="margin-top:5px">${esc(o.reply_category)}</span>`:''}</td><td>${stageSelect(o.id,o.stage,'outreach')}</td><td><div class="actions">${!Number(o.do_not_contact)?`<button class="btn smallbtn signal2" onclick="sendOne('${o.id}')" ${o.email_status?'title="Already has email activity; send will protect against duplicates"':''}>Send</button>`:''}<button class="btn smallbtn" onclick='copyEmail(${JSON.stringify(o.id)})'>Copy email</button><button class="btn smallbtn" onclick="promote('${o.id}')">Make pilot</button>${!Number(o.do_not_contact)?`<button class="btn smallbtn danger" onclick="suppress('${o.id}')">Suppress</button>`:''}</div></td></tr>`).join(''):'<tr><td colspan="7">No matching records.</td></tr>'}
+ function renderLeads(){$('leadRows').innerHTML=data.leads.length?data.leads.map(l=>`<tr><td><b>${esc(l.practice_name)}</b></td><td>${esc(l.contact_name)}</td><td>${esc(l.email)}</td><td>${esc(l.city)}</td><td>${stageSelect(l.id,l.stage,'lead')}</td></tr>`).join(''):'<tr><td colspan="5">No inbound leads yet.</td></tr>'}
+ function contentPublicPath(p){return p.path||((p.content_type==='treatment_comparison'?'/compare/':p.content_type==='treatment_profile'?'/treatments/':'/blog/')+encodeURIComponent(p.slug))}
+-function renderContent(){if(!contentData){$('contentCount').textContent='not loaded';$('contentRows').innerHTML='<tr><td colspan="7">Content worker not loaded.</td></tr>';return}const posts=contentData.posts||[];$('contentCount').textContent=`${posts.length} recent pages`;$('contentState').innerHTML=[['Content worker',contentData.ok],['Workers AI',contentData.workers_ai_configured],['Search Console',contentData.gsc_configured],['IndexNow',contentData.indexnow_configured],['SEO autopilot',String(contentData.seo_autopilot).toLowerCase()==='true']].map(([name,ok])=>`<span class="pill"><span class="dot ${ok?'ok':'bad'}"></span>${esc(name)}</span>`).join('');const missing=[];if(!contentData.workers_ai_configured)missing.push('Workers AI binding');if(!contentData.indexnow_configured)missing.push('INDEXNOW_KEY (recommended)');if(!contentData.gsc_configured)missing.push('GSC_SERVICE_ACCOUNT_JSON (recommended for feedback loop)');if(missing.length){$('contentSetup').classList.remove('hidden');$('contentSetup').innerHTML=`Content generation works once the content Worker is bound. Missing/optional signals: <b>${missing.map(esc).join(', ')}</b>.`}else{$('contentSetup').classList.add('hidden')}$('contentRows').innerHTML=posts.length?posts.map(p=>`<tr><td class="contenttitle"><b>${esc(p.title)}</b><small>${esc(p.target_query||'')}</small></td><td>${esc(p.content_type)}</td><td>${esc(p.safety_tier)}</td><td><span class="draftstate ${esc(p.status)}">${esc(p.status)}</span></td><td>${esc(p.editor_verdict||'—')}</td><td>${p.published_at?esc(new Date(p.published_at).toLocaleDateString()):'—'}</td><td><div class="actions"><button class="btn smallbtn" onclick="previewContent('${encodeURIComponent(p.slug)}')">Preview</button>${p.status==='published'?`<a class="btn smallbtn" target="_blank" href="${esc(contentPublicPath(p))}">Open</a>`:(p.editor_verdict==='publish'?`<button class="btn smallbtn signal2" onclick="publishContent('${encodeURIComponent(p.slug)}')">Publish</button>`:'')}</div></td></tr>`).join(''):'<tr><td colspan="7">No generated pages yet.</td></tr>'}
++function renderContent(){if(!contentData){$('contentCount').textContent='not loaded';$('contentRows').innerHTML='<tr><td colspan="7">Content worker not loaded.</td></tr>';return}const posts=contentData.posts||[],last=contentData.last_published_at?new Date(contentData.last_published_at).toLocaleString():'never';$('contentCount').textContent=`Auto ${contentData.auto_writer?'ON':'OFF'} · ${contentData.due?'due now':'not due'} · last ${last}`;$('contentState').innerHTML=[['Content worker',contentData.ok],['Workers AI',contentData.workers_ai_configured],['Search Console',contentData.gsc_configured],['IndexNow',contentData.indexnow_configured],['SEO autopilot',String(contentData.seo_autopilot).toLowerCase()==='true'],['Auto writer',Boolean(contentData.auto_writer)]].map(([name,ok])=>`<span class="pill"><span class="dot ${ok?'ok':'bad'}"></span>${esc(name)}</span>`).join('');const missing=[];if(!contentData.workers_ai_configured)missing.push('Workers AI binding');if(!contentData.indexnow_configured)missing.push('INDEXNOW_KEY (recommended)');if(!contentData.gsc_configured)missing.push('GSC_SERVICE_ACCOUNT_JSON (recommended for feedback loop)');if(missing.length){$('contentSetup').classList.remove('hidden');$('contentSetup').innerHTML=`Content generation works once the content Worker is bound. Missing/optional signals: <b>${missing.map(esc).join(', ')}</b>.`}else{$('contentSetup').classList.add('hidden')}$('contentRows').innerHTML=posts.length?posts.map(p=>`<tr><td class="contenttitle"><b>${esc(p.title)}</b><small>${esc(p.target_query||'')}</small></td><td>${esc(p.content_type)}</td><td>${esc(p.safety_tier)}</td><td><span class="draftstate ${esc(p.status)}">${esc(p.status)}</span></td><td>${esc(p.editor_verdict||'—')}</td><td>${p.published_at?esc(new Date(p.published_at).toLocaleDateString()):'—'}</td><td><div class="actions"><button class="btn smallbtn" onclick="previewContent('${encodeURIComponent(p.slug)}')">Preview</button>${p.status==='published'?`<a class="btn smallbtn" target="_blank" href="${esc(contentPublicPath(p))}">Open</a>`:(p.editor_verdict==='publish'?`<button class="btn smallbtn signal2" onclick="publishContent('${encodeURIComponent(p.slug)}')">Publish</button>`:'')}</div></td></tr>`).join(''):'<tr><td colspan="7">No generated pages yet.</td></tr>'}
+ async function loadContent(silent=false){try{contentData=await api('/v1/admin/content/status');renderContent();return true}catch(e){contentData=null;renderContent();if(!silent)$('status').textContent=`Content worker unavailable: ${e.message}`;return false}}
+ function render(){renderKpis();renderAgentState();renderReplies();renderOutreach();renderProviders();renderLeads();renderContent();$('app').classList.remove('hidden')}
++function parseCsv(text){
++  const rows=[];let row=[],field='',quoted=false;
++  for(let i=0;i<text.length;i++){const ch=text[i];if(quoted){if(ch==='"'&&text[i+1]==='"'){field+='"';i++}else if(ch==='"'){quoted=false}else field+=ch}else if(ch==='"'){quoted=true}else if(ch===','){row.push(field);field=''}else if(ch==='\n'){row.push(field);rows.push(row);row=[];field=''}else if(ch!=='\r'){field+=ch}}
++  if(field.length||row.length){row.push(field);rows.push(row)}
++  const nonempty=rows.filter(r=>r.some(v=>String(v).trim()));if(nonempty.length<2)return[];
++  const headers=nonempty[0].map(h=>String(h).trim().toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,''));
++  return nonempty.slice(1).map(r=>Object.fromEntries(headers.map((h,i)=>[h,String(r[i]??'').trim()])));
++}
++async function importCsvFile(file){
++  const rows=parseCsv(await file.text());if(!rows.length)throw new Error('CSV needs a header row and at least one practice.');
++  const r=await api('/v1/admin/outreach/import',{method:'POST',body:JSON.stringify({rows})});
++  await load();return r;
++}
+ async function load(){TOKEN=$('token').value.trim();if(!TOKEN){$('status').textContent='ADMIN_TOKEN required.';return}localStorage.setItem('baldwin_admin_token',TOKEN);$('status').textContent='Loading…';try{data=await api('/v1/admin/dashboard');render();await loadContent(true);$('status').textContent=`Loaded ${data.outreach.length} prospects, ${data.providers.length} providers, ${data.email_messages.filter(m=>m.direction==='inbound'&&!m.handled_at).length} pending replies.`}catch(e){$('status').textContent='Could not load dashboard. Check ADMIN_TOKEN and Worker deployment.'}}
+ window.setStage=async(type,id,stage)=>{try{await api(`/v1/admin/${type==='lead'?'leads':'outreach'}/${id}/stage`,{method:'PATCH',body:JSON.stringify({stage})});const row=(type==='lead'?data.leads:data.outreach).find(x=>x.id===id);if(row)row.stage=stage;$('status').textContent='Stage updated.'}catch(e){$('status').textContent='Stage update failed.'}}
+ window.copyText=t=>navigator.clipboard.writeText(t).then(()=>$('status').textContent='Copied.');
+@@ -122,7 +135,7 @@ window.copyEmail=id=>{const o=data.outreach.find(x=>x.id===id);if(!o)return;cons
+ window.sendOne=async id=>{const o=data.outreach.find(x=>x.id===id);if(!o)return;if(!confirm(`Send the Baldwin pilot email to ${o.practice_name} at ${o.email}?`))return;$('status').textContent=`Sending to ${o.practice_name}…`;try{await api(`/v1/admin/outreach/${id}/send`,{method:'POST',body:'{}'});await load();$('status').textContent=`Sent to ${o.practice_name}.`}catch(e){$('status').textContent=`Send failed: ${e.message}`}}
+ async function sendBatch(limit){if(!confirm(`Send the next ${limit} unsent Priority 1 prospects? This will send real email.`))return;$('status').textContent=`Sending up to ${limit} Priority 1 emails…`;try{const r=await api('/v1/admin/outreach/send-batch',{method:'POST',body:JSON.stringify({priority:1,limit})});await load();$('status').textContent=`Batch finished: ${r.sent} email${r.sent===1?'':'s'} sent.`}catch(e){$('status').textContent=`Batch failed: ${e.message}`}}
+ window.suppress=async id=>{const o=data.outreach.find(x=>x.id===id);if(!o||!confirm(`Suppress ${o.practice_name} from further sends?`))return;try{await api(`/v1/admin/outreach/${id}/suppress`,{method:'POST',body:'{}'});await load();$('status').textContent='Suppressed.'}catch(e){$('status').textContent='Suppress failed.'}}
+-window.promote=async id=>{try{const r=await api(`/v1/admin/outreach/${id}/promote`,{method:'POST',body:'{}'});await copyText(r.provider.referral_url);await load();$('status').textContent='Pilot created; trybaldwin.app referral URL copied.'}catch(e){$('status').textContent='Could not create pilot.'}}
++window.promote=async id=>{try{const r=await api(`/v1/admin/outreach/${id}/promote`,{method:'POST',body:'{}'});await copyText(r.provider.referral_url);await load();$('status').textContent='Pilot + 50%-off Apple offer created; referral URL copied.'}catch(e){$('status').textContent='Could not create pilot.'}}
+ window.sendDraft=async id=>{const box=$(`draft-${id}`);if(!box)return;const body=box.value.trim();if(!body)return alert('Reply is empty.');if(!confirm('Send this reply now?'))return;$('status').textContent='Sending reply…';try{await api(`/v1/admin/email/${id}/reply`,{method:'POST',body:JSON.stringify({body})});await load();$('status').textContent='Reply sent.'}catch(e){$('status').textContent=`Reply failed: ${e.message}`}}
+ window.redraft=async id=>{$('status').textContent='Redrafting…';try{const r=await api(`/v1/admin/email/${id}/redraft`,{method:'POST',body:'{}'});const box=$(`draft-${id}`);if(box)box.value=r.analysis.draft_reply||'';$('status').textContent=`Draft refreshed (${r.analysis.category}).`}catch(e){$('status').textContent=`Redraft failed: ${e.message}`}}
+ window.copyDraft=id=>{const box=$(`draft-${id}`);if(box)navigator.clipboard.writeText(box.value).then(()=>$('status').textContent='Reply copied.')}
+@@ -134,8 +147,10 @@ $('testAgent').onclick=async()=>{const text=prompt('Paste a sample clinic reply
+ $('send5').onclick=()=>sendBatch(5);$('send10').onclick=()=>sendBatch(10);
+ $('search').oninput=renderOutreach;$('priorityFilter').onchange=renderOutreach;$('stageFilter').onchange=renderOutreach;
+ $('export').onclick=async e=>{e.preventDefault();try{const csv=await api('/v1/admin/export.csv');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='baldwin-growth-export.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}catch(_){$('status').textContent='Export failed.'}};
+-$('newProvider').onclick=async()=>{const name=prompt('Practice name');if(!name)return;try{const r=await api('/v1/admin/providers',{method:'POST',body:JSON.stringify({name})});await copyText(r.provider.referral_url);await load();$('status').textContent='Provider created; referral URL copied.'}catch(_){$('status').textContent='Create provider failed.'}};
+-$('generateArticle').onclick=async()=>{const preferredType=$('contentType').value||null,brief=$('contentBrief').value.trim();if(!confirm('Generate one article now? Standard pages may auto-publish after the editor pass; medical pages remain drafts by default.'))return;$('generateArticle').disabled=true;$('status').textContent='Planning, researching, writing, and editing one article…';try{const r=await api('/v1/admin/content/generate',{method:'POST',body:JSON.stringify({preferredType,brief})});await loadContent(true);$('status').textContent=r.ok?`${r.status==='published'?'Published':'Generated draft'}: ${r.title||r.candidate?.suggested_title||'article'}.`:`Generation stopped at ${r.stage||'unknown'}: ${r.reason||r.error||'not publishable'}.`}catch(e){$('status').textContent=`Article generation failed: ${e.message}`}finally{$('generateArticle').disabled=false}};
++$('importCsv').onclick=()=>{$('csvFile').value='';$('csvFile').click()};
++$('csvFile').onchange=async e=>{const file=e.target.files?.[0];if(!file)return;$('status').textContent='Importing CSV…';try{const r=await importCsvFile(file);$('status').textContent=`CSV imported: ${r.inserted} added, ${r.updated} updated, ${r.skipped} skipped.`}catch(err){$('status').textContent=`CSV import failed: ${err.message}`}};
++$('newProvider').onclick=async()=>{const name=prompt('Practice name');if(!name)return;$('status').textContent='Provisioning provider + Apple offer…';try{const r=await api('/v1/admin/providers',{method:'POST',body:JSON.stringify({name})});await copyText(r.provider.referral_url);await load();$('status').textContent='Provider + 50%-off offer created; referral URL copied.'}catch(e){$('status').textContent=`Create provider failed: ${e.message}`}};
++$('generateArticle').onclick=async()=>{const preferredType=$('contentType').value||null,brief=$('contentBrief').value.trim();if(!confirm('Run one article generation now? The scheduled writer also runs automatically when publication is due.'))return;$('generateArticle').disabled=true;$('status').textContent='Planning, researching, writing, and editing one article…';try{const r=await api('/v1/admin/content/generate',{method:'POST',body:JSON.stringify({preferredType,brief})});await loadContent(true);$('status').textContent=r.ok?`${r.status==='published'?'Published':'Generated draft'}: ${r.title||r.candidate?.suggested_title||'article'}.`:`Generation stopped at ${r.stage||'unknown'}: ${r.reason||r.error||'not publishable'}.`}catch(e){$('status').textContent=`Article generation failed: ${e.message}`}finally{$('generateArticle').disabled=false}};
+ $('runSeo').onclick=async()=>{$('runSeo').disabled=true;$('status').textContent='Syncing/analyzing search feedback…';try{const r=await api('/v1/admin/content/seo-run',{method:'POST',body:'{}'});await loadContent(true);$('status').textContent=`SEO feedback run complete${r.executed!=null?`: ${r.executed} action${r.executed===1?'':'s'} executed`:''}.`}catch(e){$('status').textContent=`SEO feedback failed: ${e.message}`}finally{$('runSeo').disabled=false}};
+ window.previewContent=async slug=>{const w=window.open('','_blank');if(w)w.document.write('<p style="font-family:system-ui;padding:24px">Loading preview…</p>');try{const html=await api(`/v1/admin/content/preview/${slug}`);if(w){w.document.open();w.document.write(html);w.document.close()}}catch(e){if(w){w.document.body.innerHTML=`<pre>${esc(e.message)}</pre>`}$('status').textContent=`Preview failed: ${e.message}`}};
+ window.publishContent=async slug=>{if(!confirm('Publish this editor-approved draft now?'))return;$('status').textContent='Publishing…';try{const r=await api(`/v1/admin/content/publish/${slug}`,{method:'POST',body:'{}'});await loadContent(true);$('status').textContent=r.ok?`Published ${r.path}.`:`Publish blocked: ${r.error||'unknown reason'}.`}catch(e){$('status').textContent=`Publish failed: ${e.message}`}};
+diff --git a/trackmyhairloss-pages/ops/provider-import-template.csv b/trackmyhairloss-pages/ops/provider-import-template.csv
+new file mode 100644
+index 0000000..73df2d2
+--- /dev/null
++++ b/trackmyhairloss-pages/ops/provider-import-template.csv
+@@ -0,0 +1,2 @@
++practice_name,email,website,phone,city,category,priority,source_url,source_type,notes
++Example Hair Restoration,contact@example.com,https://example.com,+12125550123,New York,hair transplant,1,https://example.com,csv_import,Replace this example row
+diff --git a/worker/src/index.js b/worker/src/index.js
+index 4a09afa..2900cd5 100644
+--- a/worker/src/index.js
++++ b/worker/src/index.js
+@@ -1,6 +1,8 @@
+ import { GROWTH_EVENT_NAMES, activeProvider, recordGrowthEvent, upsertProviderOffer } from './growth.js';
+-import { appleOfferConfigured, provisionProviderOffer } from './appleOffers.js';
++import { appleOfferConfigured, createAppleCustomCode, customOfferCodeForProvider, provisionProviderOffer } from './appleOffers.js';
+ const EVENT_NAMES = GROWTH_EVENT_NAMES;
++const APP_LIFECYCLE_EVENTS = new Set(['attributed_install','attributed_open','app_signup','baseline_complete','second_session','subscription_started']);
++const OFFER_VARIANT = 'provider_50_two_months';
+ 
+ const STAGES = new Set(['new','identified','contacted','responded','demo','pilot','active','lost']);
+ const PROVIDER_STATUSES = new Set(['pilot','active','paused','lost']);
+@@ -30,7 +32,7 @@ function headers(request, env, extra = {}) {
+     'cache-control': 'no-store',
+     'access-control-allow-origin': allowedOrigin(request, env),
+     'access-control-allow-methods': 'GET,POST,PATCH,OPTIONS',
+-    'access-control-allow-headers': 'content-type,x-admin-token',
++    'access-control-allow-headers': 'content-type,x-admin-token,x-app-event-secret',
+     'vary': 'Origin',
+     ...extra
+   };
+@@ -46,13 +48,6 @@ function isAdmin(request, env) {
+   return Boolean(env.ADMIN_TOKEN) && token === env.ADMIN_TOKEN;
+ }
+ async function bodyJson(request) { try { return await request.json(); } catch { return null; } }
+-function scheduleProviderOffer(ctx, env, code) {
+-  if (!ctx || !appleOfferConfigured(env) || !code) return;
+-  ctx.waitUntil(provisionProviderOffer(env, code).then(result => {
+-    if (!result.ok && result.error !== 'offer_provision_in_progress') console.warn('provider offer provisioning failed', code, result.error);
+-  }).catch(error => console.warn('provider offer provisioning failed', code, clean(error?.message, 300))));
+-}
+-
+ async function contentService(env, path, { method = 'GET', body = null } = {}) {
+   if (!env.CONTENT) throw new Error('CONTENT_service_binding_not_configured');
+   const init = { method, headers: { 'x-admin-token': env.ADMIN_TOKEN } };
+@@ -219,39 +214,79 @@ async function hashToken(value = '') {
+   return Array.from(new Uint8Array(digest)).map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 32);
+ }
+ 
+-async function ensureProviderForLead(env, lead) {
+-  let provider = await env.DB.prepare(`
+-    SELECT * FROM providers
+-    WHERE lower(email)=lower(?) OR lower(name)=lower(?)
+-    ORDER BY CASE WHEN lower(email)=lower(?) THEN 0 ELSE 1 END
+-    LIMIT 1
+-  `).bind(lead.email, lead.practice_name, lead.email).first();
+-  if (provider) {
+-    await env.DB.prepare(`
+-      UPDATE providers SET
+-        contact_name=COALESCE(NULLIF(?,''),contact_name),
+-        email=COALESCE(NULLIF(?,''),email),
+-        phone=COALESCE(NULLIF(?,''),phone),
+-        website=COALESCE(NULLIF(?,''),website),
+-        city=COALESCE(NULLIF(?,''),city),
+-        state=COALESCE(NULLIF(?,''),state),
+-        status=CASE WHEN status IN ('paused','lost') THEN 'pilot' ELSE status END
+-      WHERE id=?
+-    `).bind(lead.contact_name, lead.email, lead.phone, lead.website, lead.city, lead.state, provider.id).run();
+-    return env.DB.prepare('SELECT * FROM providers WHERE id=? LIMIT 1').bind(provider.id).first();
++function providerLinks(provider) {
++  return {
++    ...provider,
++    referral_url: `https://trybaldwin.app/?ref=${encodeURIComponent(provider.code)}`,
++    kit_url: `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(provider.code)}`,
++    download_url: `https://getbaldwin.app/download?c=provider_referral&ref=${encodeURIComponent(provider.code)}&utm_source=trybaldwin&utm_campaign=provider_referral`,
++    redemption_url: provider.apple_offer_code ? `https://apps.apple.com/redeem?ctx=offercodes&id=6760326527&code=${encodeURIComponent(provider.apple_offer_code)}` : null
++  };
++}
++
++async function providerForInput(env, input, requestedCode = null) {
++  if (requestedCode) {
++    const byCode = await env.DB.prepare('SELECT * FROM providers WHERE code=? LIMIT 1').bind(requestedCode).first();
++    if (byCode) return byCode;
++  }
++  const email = extractEmailAddress(input?.email || '');
++  const name = clean(input?.name || input?.practice_name || input?.practiceName, 160);
++  if (email) {
++    const byEmail = await env.DB.prepare('SELECT * FROM providers WHERE lower(email)=lower(?) LIMIT 1').bind(email).first();
++    if (byEmail) return byEmail;
+   }
++  if (name) return env.DB.prepare('SELECT * FROM providers WHERE lower(name)=lower(?) LIMIT 1').bind(name).first();
++  return null;
++}
+ 
+-  const base = slug(lead.practice_name) || `provider-${Math.random().toString(36).slice(2,8)}`;
++async function uniqueProviderCode(env, preferred) {
++  const base = (slug(preferred) || `provider-${Math.random().toString(36).slice(2,8)}`).slice(0,48);
+   let code = base;
+-  for (let i = 0; i < 5 && await env.DB.prepare('SELECT 1 FROM providers WHERE code=?').bind(code).first(); i++) {
+-    code = `${base}-${Math.random().toString(36).slice(2,6)}`;
++  for (let i = 0; i < 8; i++) {
++    const row = await env.DB.prepare('SELECT 1 FROM providers WHERE code=? LIMIT 1').bind(code).first();
++    if (!row) return code;
++    code = `${base.slice(0,43)}-${Math.random().toString(36).slice(2,6)}`.slice(0,48);
+   }
+-  const id = uuid();
+-  await env.DB.prepare(`
+-    INSERT INTO providers (id,code,name,website,city,state,contact_name,email,phone,status)
+-    VALUES (?,?,?,?,?,?,?,?,?,'pilot')
+-  `).bind(id, code, lead.practice_name, lead.website, lead.city, lead.state, lead.contact_name, lead.email, lead.phone).run();
+-  return env.DB.prepare('SELECT * FROM providers WHERE id=? LIMIT 1').bind(id).first();
++  throw new Error('provider_code_collision');
++}
++
++async function readyAppleOffer(env, code, existingOffer = null) {
++  if (existingOffer) return existingOffer;
++  if (!appleOfferConfigured(env)) throw new Error('app_store_connect_not_configured');
++  const appleOfferCode = await customOfferCodeForProvider(code);
++  const limit = Math.max(1, Math.min(25000, Number(env.PROVIDER_OFFER_REDEMPTION_LIMIT || 25000)));
++  await createAppleCustomCode(env, appleOfferCode, limit);
++  return appleOfferCode;
++}
++
++async function provisionProvider(env, input, { source = 'ops_manual', outreachId = null } = {}) {
++  const name = clean(input?.name || input?.practice_name || input?.practiceName, 160);
++  if (!name) throw new Error('name_required');
++  const requestedCode = input?.code ? slug(input.code) : null;
++  let existing = await providerForInput(env, input, requestedCode);
++  let code = existing?.code || (requestedCode ? requestedCode.slice(0,48) : null);
++  if (!existing) code = await uniqueProviderCode(env, code || name);
++
++  // Create/reconcile the Apple custom code first. If the D1 batch below fails, a retry
++  // safely reuses the deterministic Apple code (the Apple helper reconciles 409s).
++  const appleOfferCode = await readyAppleOffer(env, code, existing?.apple_offer_code || null);
++  const id = existing?.id || uuid();
++  const website = clean(input?.website, 240), city = clean(input?.city, 120), state = clean(input?.state, 80);
++  const contactName = clean(input?.contact_name || input?.contactName, 160), email = extractEmailAddress(input?.email || ''), phone = clean(input?.phone, 80);
++  const statements = [];
++  if (existing) {
++    statements.push(env.DB.prepare(`UPDATE providers SET name=?,website=COALESCE(NULLIF(?,''),website),city=COALESCE(NULLIF(?,''),city),state=COALESCE(NULLIF(?,''),state),contact_name=COALESCE(NULLIF(?,''),contact_name),email=COALESCE(NULLIF(?,''),email),phone=COALESCE(NULLIF(?,''),phone),status=CASE WHEN status IN ('paused','lost') THEN 'pilot' ELSE status END,apple_offer_code=?,offer_variant=?,offer_provision_status='ready',offer_provision_error=NULL,offer_provisioned_at=COALESCE(offer_provisioned_at,CURRENT_TIMESTAMP),offer_provision_updated_at=CURRENT_TIMESTAMP WHERE id=?`)
++      .bind(name,website,city,state,contactName,email,phone,appleOfferCode,OFFER_VARIANT,id));
++  } else {
++    statements.push(env.DB.prepare(`INSERT INTO providers(id,code,name,website,city,state,contact_name,email,phone,status,apple_offer_code,offer_variant,offer_provision_status,offer_provisioned_at,offer_provision_updated_at) VALUES(?,?,?,?,?,?,?,?,?,'pilot',?,?,'ready',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`)
++      .bind(id,code,name,website,city,state,contactName,email,phone,appleOfferCode,OFFER_VARIANT));
++  }
++  if (outreachId) statements.push(env.DB.prepare(`UPDATE outreach SET stage='pilot',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(outreachId));
++  statements.push(env.DB.prepare(`INSERT INTO events(id,event_name,provider_code,source,metadata_json,idempotency_key) VALUES(?,'provider_pilot_created',?,?,?,?) ON CONFLICT(idempotency_key) DO NOTHING`)
++    .bind(uuid(),code,source,JSON.stringify({offer_variant:OFFER_VARIANT}),`provider_pilot_created:${code}`));
++  await env.DB.batch(statements);
++  const row = await env.DB.prepare('SELECT * FROM providers WHERE code=? LIMIT 1').bind(code).first();
++  return providerLinks(row);
+ }
+ 
+ async function ensureOutreachForLead(env, lead) {
+@@ -566,7 +601,7 @@ async function processResendWebhook(request, env) {
+ }
+ 
+ export default {
+-  async fetch(request, env, ctx) {
++  async fetch(request, env) {
+     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: headers(request, env) });
+     const url = new URL(request.url);
+     const path = url.pathname;
+@@ -582,11 +617,22 @@ export default {
+ 
+     if (request.method === 'POST' && path === '/v1/events') {
+       const body = await bodyJson(request);
+-      if (!body || !EVENT_NAMES.has(body.event)) return json(request, env, { error: 'invalid_event' }, 400);
++      if (!body || !EVENT_NAMES.has(body.event) || APP_LIFECYCLE_EVENTS.has(body.event)) return json(request, env, { error: 'invalid_event' }, 400);
+       const result = await recordGrowthEvent(env, body);
+       return json(request, env, result.body, result.status);
+     }
+ 
++    if (request.method === 'POST' && path === '/v1/internal/app-event') {
++      if (!env.APP_EVENT_SECRET || request.headers.get('x-app-event-secret') !== env.APP_EVENT_SECRET) return json(request, env, { error: 'unauthorized' }, 401);
++      const body = await bodyJson(request);
++      if (!body || !APP_LIFECYCLE_EVENTS.has(body.event)) return json(request, env, { error: 'invalid_event' }, 400);
++      // The app backend historically used anonymousId for its installation identifier.
++      // Preserve that working path while also feeding the canonical attribution engine.
++      const payload = { ...body, installationId: body.installationId || body.anonymousId || null };
++      const result = await recordGrowthEvent(env, payload);
++      return json(request, env, result.body, result.status);
++    }
++
+     if (request.method === 'POST' && path === '/v1/provider-leads') {
+       const body = await bodyJson(request);
+       if (!body?.practice_name || !body?.email) return json(request, env, { error: 'practice_name_and_email_required' }, 400);
+@@ -619,13 +665,14 @@ export default {
+         SELECT id FROM provider_leads WHERE lower(email)=lower(?) AND created_at >= datetime('now','-1 day') LIMIT 1
+       `).bind(lead.email).first();
+       if (duplicate) {
+-        const provider = await env.DB.prepare(`SELECT * FROM providers WHERE lower(email)=lower(?) OR lower(name)=lower(?) LIMIT 1`).bind(lead.email, lead.practice_name).first();
+-        if (provider?.code) scheduleProviderOffer(ctx, env, provider.code);
++        let provider = await env.DB.prepare(`SELECT * FROM providers WHERE lower(email)=lower(?) OR lower(name)=lower(?) LIMIT 1`).bind(lead.email, lead.practice_name).first();
++        try { provider = await provisionProvider(env, { ...lead, name: lead.practice_name }, { source: 'providers_form_retry' }); }
++        catch (error) { console.error('provider retry provisioning failed', clean(error?.message,300)); }
+         return json(request, env, {
+           ok: true,
+           duplicate: true,
+-          referral_url: provider ? `https://trybaldwin.app/?ref=${encodeURIComponent(provider.code)}` : null,
+-          kit_url: provider ? `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(provider.code)}` : null
++          referral_url: provider?.referral_url || (provider?.code ? `https://trybaldwin.app/?ref=${encodeURIComponent(provider.code)}` : null),
++          kit_url: provider?.kit_url || (provider?.code ? `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(provider.code)}` : null)
+         }, 200);
+       }
+ 
+@@ -637,22 +684,22 @@ export default {
+           .bind(uuid(), sourceHash, JSON.stringify({ lead_id: leadId }))
+       ]);
+ 
+-      const provider = await ensureProviderForLead(env, lead);
+-      scheduleProviderOffer(ctx, env, provider.code);
++      let provider;
++      try { provider = await provisionProvider(env, { ...lead, name: lead.practice_name }, { source: 'providers_form' }); }
++      catch (error) { console.error('provider provisioning failed', clean(error?.message,300)); return json(request, env, { error: 'pilot_provisioning_unavailable', detail: clean(error?.message,300) }, 503); }
+       const outreach = await ensureOutreachForLead(env, lead);
+       const copy = providerPilotCopy(lead, provider);
+       let emailResult = { sent: false, suppressed: Number(outreach.do_not_contact) === 1 };
+       try { emailResult = await sendProviderPilot(env, outreach, lead, provider); }
+       catch (error) { console.error('provider pilot email failed', clean(error?.message,300)); }
+ 
+-      await env.DB.prepare(`INSERT INTO events (id,event_name,provider_code,source,metadata_json) VALUES (?, 'provider_pilot_created', ?, 'providers_form', ?)`)
+-        .bind(uuid(), provider.code, JSON.stringify({ lead_id: leadId, email_sent: Boolean(emailResult.sent) })).run();
+-
+       return json(request, env, {
+         ok: true,
+         provider_code: provider.code,
+         referral_url: copy.referralUrl,
+         kit_url: copy.kitUrl,
++        redemption_url: provider.redemption_url,
++        offer_variant: provider.offer_variant,
+         email_sent: Boolean(emailResult.sent),
+         email_suppressed: Boolean(emailResult.suppressed)
+       }, 201);
+@@ -726,17 +773,45 @@ export default {
+       }
+ 
+       if (request.method === 'POST' && path === '/v1/admin/providers') {
+-        const body = await bodyJson(request);
+-        if (!body?.name) return json(request, env, { error: 'name_required' }, 400);
+-        let code = slug(body.code || body.name) || `provider-${Math.random().toString(36).slice(2,8)}`;
+-        if (await env.DB.prepare('SELECT 1 FROM providers WHERE code=?').bind(code).first()) code = `${code}-${Math.random().toString(36).slice(2,6)}`;
+-        const id = uuid();
+-        await env.DB.prepare(`INSERT INTO providers (id,code,name,website,city,state,status) VALUES (?,?,?,?,?,?,'pilot')`)
+-          .bind(id, code, clean(body.name,160), clean(body.website,240), clean(body.city,120), clean(body.state,80)).run();
+-        scheduleProviderOffer(ctx, env, code);
+-        return json(request, env, { ok: true, provider: { id, code, name: body.name, referral_url: `https://trybaldwin.app/?ref=${encodeURIComponent(code)}`, offer_status: appleOfferConfigured(env) ? 'provisioning' : 'unconfigured' } }, 201);
++        const body = await bodyJson(request) || {};
++        try {
++          const provider = await provisionProvider(env, body, { source: 'ops_manual' });
++          return json(request, env, { ok: true, provider }, 201);
++        } catch (error) {
++          return json(request, env, { error: clean(error?.message,400) }, error?.message === 'app_store_connect_not_configured' ? 503 : 400);
++        }
+       }
+ 
++      if (request.method === 'POST' && path === '/v1/admin/outreach/import') {
++        const body = await bodyJson(request) || {};
++        const rows = Array.isArray(body.rows) ? body.rows.slice(0, 1000) : [];
++        if (!rows.length) return json(request, env, { error: 'rows_required' }, 400);
++        const results = [];
++        for (let i = 0; i < rows.length; i++) {
++          const raw = rows[i] || {};
++          const practiceName = clean(raw.practice_name || raw.practiceName || raw.name || raw.practice || raw.clinic, 160);
++          const email = extractEmailAddress(raw.email || raw.work_email || raw.contact_email || '');
++          if (!practiceName) { results.push({ row:i+1, ok:false, action:'skipped', error:'practice_name_required' }); continue; }
++          const website=clean(raw.website||raw.url,240), phone=clean(raw.phone,80), city=clean(raw.city,120), category=clean(raw.category||raw.type,100);
++          const sourceUrl=clean(raw.source_url||raw.sourceUrl||website,500), sourceType=clean(raw.source_type||raw.sourceType||'csv_import',80), notes=clean(raw.notes,1600);
++          const priorityRaw=Number(raw.priority), priority=Number.isFinite(priorityRaw)&&priorityRaw>=1&&priorityRaw<=3?Math.trunc(priorityRaw):null;
++          let existing=email?await env.DB.prepare('SELECT id FROM outreach WHERE lower(email)=lower(?) LIMIT 1').bind(email).first():null;
++          if(!existing) existing=await env.DB.prepare(`SELECT id FROM outreach WHERE lower(practice_name)=lower(?) AND lower(COALESCE(city,''))=lower(?) LIMIT 1`).bind(practiceName,city).first();
++          if(existing){
++            await env.DB.prepare(`UPDATE outreach SET practice_name=?,website=COALESCE(NULLIF(?,''),website),email=COALESCE(NULLIF(?,''),email),phone=COALESCE(NULLIF(?,''),phone),city=COALESCE(NULLIF(?,''),city),category=COALESCE(NULLIF(?,''),category),priority=COALESCE(?,priority),source_url=COALESCE(NULLIF(?,''),source_url),source_type=COALESCE(NULLIF(?,''),source_type),notes=CASE WHEN ?='' THEN notes ELSE COALESCE(notes || char(10),'') || ? END,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
++              .bind(practiceName,website,email,phone,city,category,priority,sourceUrl,sourceType,notes,notes,existing.id).run();
++            results.push({row:i+1,ok:true,action:'updated',id:existing.id,practice_name:practiceName});
++          }else{
++            const id=uuid();
++            await env.DB.prepare(`INSERT INTO outreach(id,practice_name,website,email,phone,city,category,priority,source_url,source_type,stage,notes) VALUES(?,?,?,?,?,?,?,?,?,?,'identified',?)`)
++              .bind(id,practiceName,website,email,phone,city,category,priority,sourceUrl,sourceType,notes).run();
++            results.push({row:i+1,ok:true,action:'inserted',id,practice_name:practiceName});
++          }
++        }
++        return json(request, env, { ok:true, received:rows.length, inserted:results.filter(x=>x.action==='inserted').length, updated:results.filter(x=>x.action==='updated').length, skipped:results.filter(x=>!x.ok).length, results }, 201);
++      }
++
++
+       if (request.method === 'POST' && path === '/v1/admin/outreach') {
+         const body = await bodyJson(request);
+         if (!body?.practiceName) return json(request, env, { error: 'practice_name_required' }, 400);
+@@ -805,20 +880,15 @@ export default {
+       if (request.method === 'POST' && promoteMatch) {
+         const lead = await env.DB.prepare('SELECT * FROM outreach WHERE id=? LIMIT 1').bind(promoteMatch[1]).first();
+         if (!lead) return json(request, env, { error: 'not_found' }, 404);
+-        let existing = await env.DB.prepare('SELECT id, code, name, website, city, state, status FROM providers WHERE lower(name)=lower(?) LIMIT 1').bind(lead.practice_name).first();
+-        if (!existing) {
+-          let code = slug(lead.practice_name) || `provider-${Math.random().toString(36).slice(2,8)}`;
+-          if (await env.DB.prepare('SELECT 1 FROM providers WHERE code=?').bind(code).first()) code = `${code}-${Math.random().toString(36).slice(2,6)}`;
+-          const id = uuid();
+-          await env.DB.prepare(`INSERT INTO providers (id,code,name,website,city,email,status) VALUES (?,?,?,?,?,?,'pilot')`)
+-            .bind(id, code, lead.practice_name, lead.website || '', lead.city || '', lead.email || '').run();
+-          existing = { id, code, name: lead.practice_name, website: lead.website || '', city: lead.city || '', state: '', status: 'pilot' };
++        try {
++          const provider = await provisionProvider(env, { name:lead.practice_name, website:lead.website, city:lead.city, email:lead.email, phone:lead.phone }, { outreachId:lead.id, source:'ops_promote' });
++          return json(request, env, { ok:true, provider });
++        } catch (error) {
++          return json(request, env, { error:clean(error?.message,400) }, error?.message === 'app_store_connect_not_configured' ? 503 : 400);
+         }
+-        await env.DB.prepare(`UPDATE outreach SET stage='pilot', updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(lead.id).run();
+-        scheduleProviderOffer(ctx, env, existing.code);
+-        return json(request, env, { ok: true, provider: { ...existing, referral_url: `https://trybaldwin.app/?ref=${encodeURIComponent(existing.code)}`, kit_url: `https://trackmyhairloss.com/provider-kit/?ref=${encodeURIComponent(existing.code)}`, offer_status: appleOfferConfigured(env) ? 'provisioning' : 'unconfigured' } });
+       }
+ 
++
+       const replyMatch = path.match(/^\/v1\/admin\/email\/([^/]+)\/reply$/);
+       if (request.method === 'POST' && replyMatch) {
+         const body = await bodyJson(request) || {};
+diff --git a/worker/wrangler.toml b/worker/wrangler.toml
+index ae61590..2086077 100644
+--- a/worker/wrangler.toml
++++ b/worker/wrangler.toml
+@@ -16,3 +16,12 @@ database_id = "48fcce74-b672-40aa-8080-9a04021cd5b9"
+ [[services]]
+ binding = "CONTENT"
+ service = "trackmyhairloss-content"
++
++# Secret used by baldwin-api to relay authenticated app lifecycle events into
++# this canonical Growth API event store. Configure the same value on both Workers:
++# npx wrangler secret put APP_EVENT_SECRET
++# App Store Connect secrets used for synchronous provider + 50%-off offer provisioning:
++# npx wrangler secret put ASC_ISSUER_ID
++# npx wrangler secret put ASC_KEY_ID
++# npx wrangler secret put ASC_PRIVATE_KEY
++# npx wrangler secret put ASC_PROVIDER_OFFER_ID

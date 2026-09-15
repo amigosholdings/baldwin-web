@@ -2,6 +2,8 @@ const MODEL = '@cf/zai-org/glm-5.3';
 const SITE = 'https://trackmyhairloss.com';
 const MIN_PUBLISH_GAP_MS = 46 * 60 * 60 * 1000;
 const MAX_EXISTING_CONTEXT = 80;
+const DEFAULT_SCHEDULED_ATTEMPTS = 4;
+const SCHEDULED_TYPE_FALLBACKS = [null, 'tracking_guide', 'question', 'treatment_comparison', 'treatment_profile'];
 
 // Boundaries, not exact topics. The planner decides the actual query/title each run.
 const EDITORIAL_PILLARS = [
@@ -413,13 +415,18 @@ async function loadEditorialContext(env) {
     gsc = latest.map(r=>({source:'google_search_console',query:r.query,page:r.page,clicks:r.clicks,impressions:r.impressions,position:r.position,citations:0,observed_at:r.window_end,ctr:r.ctr}));
   } catch {}
   const signals = [...gsc,...manualSignals].slice(0,100);
-  return { posts, signals };
+  const recentCandidates = (await env.DB.prepare(`
+    SELECT suggested_title,target_query,content_type,safety_tier,status,created_at
+    FROM topic_candidates
+    ORDER BY created_at DESC LIMIT 80
+  `).all()).results || [];
+  return { posts, signals, recentCandidates };
 }
 
 async function plan(env, preferredType=null, brief='') {
   const context = await loadEditorialContext(env);
   const system = `You are the managing editor and search strategist for TrackMyHairLoss.com, a useful hair-progress utility site connected to the Baldwin iPhone app. You choose what to publish; you do not write the article yet. Optimize for user satisfaction, information gain, traditional search, and citation-worthiness in AI answers. Do not create keyword permutations, doorway pages, thin listicles, or near-duplicates. Treatment topics are allowed, including direct comparisons, but must be framed as evidence-based educational comparisons rather than personalized prescribing.`;
-  const user = `EDITORIAL TERRITORY (broad boundaries, not a topic list):\n${EDITORIAL_PILLARS.map(x=>'- '+x).join('\n')}\n\nAVAILABLE TOOLS:\n${TOOLS.map(t=>`- ${t.name} (${t.path}): ${t.intent}`).join('\n')}\n\nEXISTING/RECENT CONTENT:\n${JSON.stringify(context.posts)}\n\nSEARCH + AI VISIBILITY SIGNALS (may be empty early on):\n${JSON.stringify(context.signals)}\n\n${preferredType ? `Preferred content type for this run: ${preferredType}.` : ''}\n${brief ? `Additional editorial brief from the operator: ${brief}` : ''}\n\nGenerate EXACTLY 10 genuinely distinct candidates even if search-signal data is empty. Empty candidates are invalid. Prefer a concrete question a real user would ask. For treatment comparisons, propose neutral research queries suitable for PubMed and list drug/procedure terms separately. Mark all treatment_comparison and treatment_profile candidates safety_tier=medical. Standard tracking/process pieces are safety_tier=standard. Score each dimension 0-10. Search score should reflect plausible intent, not made-up volume. Evidence score should reflect how likely the question is to be answerable from credible primary/authoritative sources. Avoid topics substantially covered by existing content.`;
+  const user = `EDITORIAL TERRITORY (broad boundaries, not a topic list):\n${EDITORIAL_PILLARS.map(x=>'- '+x).join('\n')}\n\nAVAILABLE TOOLS:\n${TOOLS.map(t=>`- ${t.name} (${t.path}): ${t.intent}`).join('\n')}\n\nEXISTING/RECENT CONTENT:\n${JSON.stringify(context.posts)}\n\nRECENTLY PROPOSED/SELECTED/REJECTED TOPICS (do not recycle these):\n${JSON.stringify(context.recentCandidates)}\n\nSEARCH + AI VISIBILITY SIGNALS (may be empty early on):\n${JSON.stringify(context.signals)}\n\n${preferredType ? `Preferred content type for this run: ${preferredType}.` : ''}\n${brief ? `Additional editorial brief from the operator: ${brief}` : ''}\n\nGenerate EXACTLY 10 genuinely distinct candidates even if search-signal data is empty. Empty candidates are invalid. Prefer a concrete question a real user would ask. For treatment comparisons, propose neutral research queries suitable for PubMed and list drug/procedure terms separately. Mark all treatment_comparison and treatment_profile candidates safety_tier=medical. Standard tracking/process pieces are safety_tier=standard. Score each dimension 0-10. Search score should reflect plausible intent, not made-up volume. Evidence score should reflect how likely the question is to be answerable from credible primary/authoritative sources. Avoid topics substantially covered by existing content.`;
 
   const attempts = [];
   const first = await aiJson(env, plannerSchema(), system, user, {maxTokens:5200, temperature:0.35, reasoningEffort:'high'});
@@ -735,6 +742,7 @@ async function generateOne(env, opts={}) {
   const sources = await research(env,candidate);
   if (candidate.safety_tier === 'medical' && sources.filter(s=>s.kind==='pubmed').length < 3) {
     await log('research','rejected',{reason:'insufficient_pubmed_evidence',sources:publicSources(sources)});
+    await env.DB.prepare("UPDATE topic_candidates SET status='rejected', selected_at=CURRENT_TIMESTAMP WHERE target_query=? AND status='proposed'").bind(candidate.target_query).run();
     return {ok:false,stage:'research',reason:'insufficient_pubmed_evidence',candidate,sources:publicSources(sources)};
   }
   await log('research','ok',{source_count:sources.length});
@@ -761,17 +769,36 @@ async function due(env) {
   return !last || Date.now() - Date.parse(last.published_at) >= MIN_PUBLISH_GAP_MS;
 }
 
+async function scheduledSeoRun(env) {
+  const state = await env.DB.prepare("SELECT value FROM seo_state WHERE key='last_scheduled_seo_run' LIMIT 1").first();
+  if (state?.value && Date.now() - Date.parse(state.value) < 20 * 60 * 60 * 1000) return {ok:true,skipped:'not_due'};
+  const result = await runSeoFeedbackLoop(env).catch(e=>({ok:false,error:e?.message||String(e)}));
+  await env.DB.prepare("INSERT INTO seo_state(key,value,updated_at) VALUES('last_scheduled_seo_run',?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP").bind(nowIso()).run();
+  return result;
+}
+
 async function scheduledRun(env) {
-  // Search feedback runs every day. Content generation remains gated by the ~46h publication cadence.
-  const seo = await runSeoFeedbackLoop(env).catch(e=>({ok:false,error:e?.message||String(e)}));
+  const seo = await scheduledSeoRun(env);
+  if (String(env.AUTO_WRITER || 'true').toLowerCase() === 'false') return {ok:true,seo,content:{skipped:'auto_writer_off'}};
   if (!(await due(env))) return {ok:true,seo,content:{skipped:'not_due'}};
-  let first = await generateOne(env,{mode:'scheduled'});
-  // Medical pages default to draft. Still ship one safe standard page so the ~48h publication cadence continues.
-  if ((!first.ok || (first.status==='draft' && first.candidate?.safety_tier==='medical')) && String(env.AUTO_PUBLISH_MEDICAL).toLowerCase()!=='true') {
-    const second = await generateOne(env,{mode:'scheduled_fallback',preferredType:'tracking_guide'});
-    return {ok:true,seo,medical_result:first,standard_publication:second};
+
+  const maxAttempts = clamp(env.AUTO_CONTENT_MAX_ATTEMPTS || DEFAULT_SCHEDULED_ATTEMPTS, 1, 6);
+  const attempts = [];
+  for (let i = 0; i < maxAttempts; i++) {
+    const preferredType = SCHEDULED_TYPE_FALLBACKS[i % SCHEDULED_TYPE_FALLBACKS.length];
+    try {
+      const result = await generateOne(env, {
+        mode: i === 0 ? 'scheduled' : `scheduled_retry_${i + 1}`,
+        preferredType,
+        brief: i === 0 ? '' : 'Choose a distinct publishable topic not covered by any candidate or page generated earlier in this scheduled run.'
+      });
+      attempts.push({attempt:i+1,preferredType,ok:result.ok,status:result.status||null,stage:result.stage||null,reason:result.reason||null,title:result.title||result.candidate?.suggested_title||null});
+      if (result.ok && result.status === 'published') return {ok:true,seo,content:result,attempts};
+    } catch (error) {
+      attempts.push({attempt:i+1,preferredType,ok:false,error:error?.message||String(error)});
+    }
   }
-  return {ok:true,seo,content:first};
+  return {ok:false,seo,content:{error:'no_publishable_article_after_retries'},attempts};
 }
 
 async function notifyIndexNow(env, paths) {
@@ -981,7 +1008,7 @@ export default {
     if (path.startsWith('/treatments/')) return renderArticle(env,decodeURIComponent(path.slice(12)),'treatment_profile');
 
     if (path.startsWith('/__') && !adminOk(req,env)) return new Response('Unauthorized',{status:401});
-    if (path==='/__status') return Response.json({ok:true,model:MODEL,due:await due(env),workers_ai_configured:Boolean(env.AI),indexnow_configured:Boolean(env.INDEXNOW_KEY),auto_publish_standard:env.AUTO_PUBLISH_STANDARD,auto_publish_medical:env.AUTO_PUBLISH_MEDICAL,seo_autopilot:env.SEO_AUTOPILOT,seo_refresh_medical:env.SEO_REFRESH_MEDICAL,gsc_configured:Boolean(env.GSC_SERVICE_ACCOUNT_JSON),posts:await listAdmin(env)});
+    if (path==='/__status') { const last=await env.DB.prepare("SELECT published_at FROM content_pages WHERE status='published' AND published_at IS NOT NULL ORDER BY published_at DESC LIMIT 1").first(); const lastRuns=(await env.DB.prepare("SELECT mode,stage,status,details_json,created_at FROM content_runs ORDER BY created_at DESC LIMIT 12").all()).results||[]; return Response.json({ok:true,model:MODEL,due:await due(env),auto_writer:String(env.AUTO_WRITER||'true').toLowerCase()!=='false',publish_gap_hours:MIN_PUBLISH_GAP_MS/3600000,last_published_at:last?.published_at||null,workers_ai_configured:Boolean(env.AI),indexnow_configured:Boolean(env.INDEXNOW_KEY),auto_publish_standard:env.AUTO_PUBLISH_STANDARD,auto_publish_medical:env.AUTO_PUBLISH_MEDICAL,seo_autopilot:env.SEO_AUTOPILOT,seo_refresh_medical:env.SEO_REFRESH_MEDICAL,gsc_configured:Boolean(env.GSC_SERVICE_ACCOUNT_JSON),recent_runs:lastRuns,posts:await listAdmin(env)}); }
     if (path==='/__ai-test' && req.method==='POST') {
       const result = await env.AI.run(MODEL, {
         messages:[{role:'user',content:'Reply with exactly the word OK.'}],

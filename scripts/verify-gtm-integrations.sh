@@ -19,7 +19,7 @@ curl -fsS -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' \
   "$GROWTH_URL/v1/admin/email/test-agent" | python3 -m json.tool
 
 printf '\n==> Content configuration through service binding\n'
-curl -fsS -H "x-admin-token: $ADMIN_TOKEN" "$GROWTH_URL/v1/admin/content/status" | python3 -c 'import json,sys; d=json.load(sys.stdin); keep=["ok","model","workers_ai_configured","indexnow_configured","gsc_configured","seo_autopilot","auto_publish_standard","auto_publish_medical"]; print(json.dumps({k:d.get(k) for k in keep}, indent=2))'
+curl -fsS -H "x-admin-token: $ADMIN_TOKEN" "$GROWTH_URL/v1/admin/content/status" | python3 -c 'import json,sys; d=json.load(sys.stdin); keep=["ok","model","auto_writer","due","publish_gap_hours","last_published_at","workers_ai_configured","indexnow_configured","gsc_configured","seo_autopilot","auto_publish_standard","auto_publish_medical"]; print(json.dumps({k:d.get(k) for k in keep}, indent=2))'
 
 printf '\n==> Public IndexNow verification endpoint\n'
 HTTP="$(curl -sS -o /tmp/baldwin-indexnow-key.txt -w '%{http_code}' https://trackmyhairloss.com/indexnow-key.txt || true)"

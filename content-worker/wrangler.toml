@@ -19,13 +19,15 @@ SITE_URL = "https://trackmyhairloss.com"
 NCBI_TOOL = "trackmyhairloss"
 NCBI_EMAIL = "threeamigosholdings@gmail.com"
 SEO_AUTOPILOT = "true"
+AUTO_WRITER = "true"
+AUTO_CONTENT_MAX_ATTEMPTS = "4"
 SEO_REFRESH_MEDICAL = "true"
 GSC_SITE_URL = "sc-domain:trackmyhairloss.com"
 GSC_LOOKBACK_DAYS = "28"
 GSC_DATA_LAG_DAYS = "3"
 
 [triggers]
-crons = ["17 13 * * *"]
+crons = ["17 1,7,13,19 * * *"]
 
 [[routes]]
 pattern = "trackmyhairloss.com/blog*"
