@@ -8,7 +8,8 @@
     "dev": "wrangler dev",
     "migrate": "wrangler d1 execute baldwin-growth --remote --file=./migration-v2.sql",
     "seed": "wrangler d1 execute baldwin-growth --remote --file=./seed.sql",
-    "check": "node --check src/index.js",
+    "check": "node --check src/index.js && node --check src/worker.js && node --test test/*.test.mjs",
+    "test": "node --test test/*.test.mjs",
     "migrate:v4": "wrangler d1 execute baldwin-growth --remote --file=./migration-v3.sql"
   },
   "devDependencies": {
