@@ -3,6 +3,10 @@ import { applyContentPromptOverrides } from './prompt-overrides.js';
 
 const OPERATOR_CRON = '* * * * *';
 const BASE_OPERATOR_CRON = '*/5 * * * *';
+const CONTENT_ADMIN_ORIGINS = new Set([
+  'https://trackmyhairloss.com',
+  'https://www.trackmyhairloss.com'
+]);
 
 function withPromptOverrides(env) {
   if (!env?.AI?.run) return env;
@@ -22,6 +26,66 @@ function withPromptOverrides(env) {
 
 function adminOk(request, env) {
   return Boolean(env.ADMIN_TOKEN) && request.headers.get('x-admin-token') === env.ADMIN_TOKEN;
+}
+
+function contentAdminCors(request) {
+  const origin = request.headers.get('Origin') || '';
+  if (!origin || !CONTENT_ADMIN_ORIGINS.has(origin)) return {};
+  return {
+    'access-control-allow-origin': origin,
+    'access-control-allow-methods': 'POST,OPTIONS',
+    'access-control-allow-headers': 'content-type,x-admin-token',
+    'access-control-max-age': '86400',
+    'vary': 'Origin'
+  };
+}
+
+function contentAdminJson(request, body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+      ...contentAdminCors(request)
+    }
+  });
+}
+
+async function deleteContentPage(request, env, rawSlug) {
+  if (!adminOk(request, env)) return contentAdminJson(request, { error: 'unauthorized' }, 401);
+
+  let slug = '';
+  try { slug = decodeURIComponent(rawSlug || '').trim(); }
+  catch { return contentAdminJson(request, { error: 'invalid_slug' }, 400); }
+  if (!/^[a-z0-9][a-z0-9-]{0,99}$/.test(slug)) {
+    return contentAdminJson(request, { error: 'invalid_slug' }, 400);
+  }
+
+  const page = await env.DB.prepare(
+    `SELECT id,slug,title,content_type,status FROM content_pages WHERE slug=? LIMIT 1`
+  ).bind(slug).first();
+  if (!page) return contentAdminJson(request, { error: 'not_found' }, 404);
+
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM seo_actions WHERE slug=?`).bind(slug),
+    env.DB.prepare(`DELETE FROM content_pages WHERE slug=?`).bind(slug)
+  ]);
+
+  const prefix = page.content_type === 'treatment_comparison'
+    ? '/compare/'
+    : page.content_type === 'treatment_profile'
+      ? '/treatments/'
+      : '/blog/';
+
+  return contentAdminJson(request, {
+    ok: true,
+    deleted: {
+      slug: page.slug,
+      title: page.title,
+      status: page.status,
+      path: `${prefix}${page.slug}`
+    }
+  });
 }
 
 async function enqueueOperatorJob(request, env, mode) {
@@ -102,6 +166,15 @@ async function runOneOperatorJob(env) {
 export default {
   async fetch(request, env, ctx) {
     const path = new URL(request.url).pathname;
+    const deleteMatch = path.match(/^\/__delete\/([^/]+)$/);
+    if (request.method === 'OPTIONS' && deleteMatch) {
+      const origin = request.headers.get('Origin') || '';
+      if (!CONTENT_ADMIN_ORIGINS.has(origin)) return new Response(null, { status: 403 });
+      return new Response(null, { status: 204, headers: contentAdminCors(request) });
+    }
+    if (request.method === 'POST' && deleteMatch) {
+      return deleteContentPage(request, env, deleteMatch[1]);
+    }
     if (request.method === 'POST' && path === '/__generate') {
       return enqueueOperatorJob(request, env, 'operator_generate');
     }
