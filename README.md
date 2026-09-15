@@ -170,3 +170,7 @@ Do not commit runtime secrets or Google service-account JSON files.
 ### Final integration setup
 
 After Resend is configured, run `scripts/setup-gtm-integrations.sh` to finish IndexNow, Search Console, OpenRouter, the content Worker, and the Growth Worker. See `FINAL_SETUP.md`.
+
+## getbaldwin.app
+
+The deployable `getbaldwin.app` Pages project lives in `getbaldwin-pages/`. See `getbaldwin-pages/HANDOFF.md` for its Growth Worker contract, required Pages variables, local verification, and Cloudflare deployment settings.

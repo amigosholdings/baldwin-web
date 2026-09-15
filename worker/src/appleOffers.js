@@ -30,16 +30,38 @@ export async function makeAppStoreConnectToken(env,nowSeconds=Math.floor(Date.no
   return `${input}.${bytesToBase64Url(signature)}`;
 }
 
-async function createAppleCustomCode(env,customCode,redemptionLimit=DEFAULT_LIMIT){
+async function ascFetch(env,url,init={}){
+  const response=await fetch(url,{...init,headers:{Authorization:`Bearer ${await makeAppStoreConnectToken(env)}`,...(init.headers||{})}});
+  const text=await response.text();let body={};try{body=text?JSON.parse(text):{}}catch{body={raw:text}}
+  return{response,body,text};
+}
+
+export async function findExistingAppleCustomCode(env,rawCustomCode){
+  const customCode=offerCode(rawCustomCode);if(!customCode||!appleOfferConfigured(env))return null;
+  let url=`https://api.appstoreconnect.apple.com/v1/subscriptionOfferCodes/${encodeURIComponent(String(env.ASC_PROVIDER_OFFER_ID))}/customCodes?fields%5BsubscriptionOfferCodeCustomCodes%5D=customCode%2Cactive%2CnumberOfCodes&limit=200`;
+  for(let page=0;url&&page<20;page++){
+    const {response,body,text}=await ascFetch(env,url,{headers:{accept:'application/json'}});
+    if(!response.ok){const error=new Error(`app_store_connect_${response.status}`);error.status=response.status;error.detail=clean(body?.errors?.[0]?.detail||body?.errors?.[0]?.title||text,500);throw error}
+    const match=Array.isArray(body?.data)?body.data.find(item=>offerCode(item?.attributes?.customCode)===customCode):null;
+    if(match)return{customCode,active:match?.attributes?.active!==false,id:clean(match?.id,120)||null,numberOfCodes:Number(match?.attributes?.numberOfCodes||0)||null};
+    url=typeof body?.links?.next==='string'?body.links.next:null;
+  }
+  return null;
+}
+
+export async function createAppleCustomCode(env,customCode,redemptionLimit=DEFAULT_LIMIT){
   const limit=Number.isInteger(redemptionLimit)?Math.max(1,Math.min(25000,redemptionLimit)):DEFAULT_LIMIT;
-  const response=await fetch('https://api.appstoreconnect.apple.com/v1/subscriptionOfferCodeCustomCodes',{
+  const {response,body,text}=await ascFetch(env,'https://api.appstoreconnect.apple.com/v1/subscriptionOfferCodeCustomCodes',{
     method:'POST',
-    headers:{Authorization:`Bearer ${await makeAppStoreConnectToken(env)}`,'content-type':'application/json'},
+    headers:{'content-type':'application/json'},
     body:JSON.stringify({data:{type:'subscriptionOfferCodeCustomCodes',attributes:{customCode,numberOfCodes:limit},relationships:{offerCode:{data:{type:'subscriptionOfferCodes',id:String(env.ASC_PROVIDER_OFFER_ID)}}}}})
   });
-  const text=await response.text();let body={};try{body=text?JSON.parse(text):{}}catch{body={raw:text}}
-  if(!response.ok){const error=new Error(`app_store_connect_${response.status}`);error.status=response.status;error.detail=clean(body?.errors?.[0]?.detail||body?.errors?.[0]?.title||text,500);throw error}
-  return body;
+  if(response.ok)return{body,reconciled:false};
+  if(response.status===409){
+    const existing=await findExistingAppleCustomCode(env,customCode);
+    if(existing?.active)return{body:{data:{id:existing.id,type:'subscriptionOfferCodeCustomCodes',attributes:{customCode:existing.customCode,active:true,numberOfCodes:existing.numberOfCodes}}},reconciled:true};
+  }
+  const error=new Error(`app_store_connect_${response.status}`);error.status=response.status;error.detail=clean(body?.errors?.[0]?.detail||body?.errors?.[0]?.title||text,500);throw error;
 }
 
 async function markProvisionError(env,code,error){
@@ -62,9 +84,9 @@ export async function provisionProviderOffer(env,rawCode,{redemptionLimit=DEFAUL
 
   const customCode=await customOfferCodeForProvider(code);
   try{
-    await createAppleCustomCode(env,customCode,redemptionLimit);
-    await env.DB.prepare(`UPDATE providers SET apple_offer_code=?,offer_variant=?,offer_provision_status='ready',offer_provision_error=NULL,offer_provisioned_at=CURRENT_TIMESTAMP,offer_provision_updated_at=CURRENT_TIMESTAMP WHERE code=?`).bind(customCode,OFFER_VARIANT,code).run();
-    return{ok:true,status:201,providerCode:code,appleOfferCode:customCode,offerVariant:OFFER_VARIANT};
+    const created=await createAppleCustomCode(env,customCode,redemptionLimit);
+    await env.DB.prepare(`UPDATE providers SET apple_offer_code=?,offer_variant=?,offer_provision_status='ready',offer_provision_error=NULL,offer_provisioned_at=COALESCE(offer_provisioned_at,CURRENT_TIMESTAMP),offer_provision_updated_at=CURRENT_TIMESTAMP WHERE code=?`).bind(customCode,OFFER_VARIANT,code).run();
+    return{ok:true,status:created.reconciled?200:201,reconciled:Boolean(created.reconciled),providerCode:code,appleOfferCode:customCode,offerVariant:OFFER_VARIANT};
   }catch(error){
     await markProvisionError(env,code,error);
     return{ok:false,status:Number(error?.status)||502,error:'offer_provision_failed',detail:clean(error?.detail||error?.message,500)};
