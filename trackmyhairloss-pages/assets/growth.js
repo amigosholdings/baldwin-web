@@ -6,9 +6,14 @@ window.BALDWIN_GROWTH_API=window.BALDWIN_GROWTH_API||'https://baldwin-growth-api
   let id=localStorage.getItem(anonKey);
   if(!id){id=(crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2));localStorage.setItem(anonKey,id)}
   const incomingRef=params.get('ref');
-  const existingRef=localStorage.getItem(providerKey);
-  if(!validProvider(existingRef)&&validProvider(incomingRef)) localStorage.setItem(providerKey,incomingRef);
-  const providerCode=validProvider(localStorage.getItem(providerKey))?localStorage.getItem(providerKey):null;
+  // Provider attribution is session-scoped. A prior clinic referral must never
+  // turn a later direct Baldwin visit into a provider-offer visit.
+  try{localStorage.removeItem(providerKey)}catch(_){}
+  const existingRef=sessionStorage.getItem(providerKey);
+  if(validProvider(incomingRef)) sessionStorage.setItem(providerKey,incomingRef);
+  const providerCode=validProvider(incomingRef)
+    ? incomingRef
+    : (validProvider(existingRef)?existingRef:null);
   const source=(params.get('utm_source')||'trackmyhairloss').slice(0,80);
   const campaign=(params.get('utm_campaign')||location.pathname).slice(0,120);
 
@@ -30,6 +35,15 @@ window.BALDWIN_GROWTH_API=window.BALDWIN_GROWTH_API||'https://baldwin-growth-api
     document.querySelectorAll('a[href*="getbaldwin.app/download"]').forEach(a=>{
       try{
         const u=new URL(a.href);
+        const direct=a.hasAttribute('data-direct-baldwin');
+        if(direct){
+          u.searchParams.delete('ref');
+          if(!u.searchParams.get('aid'))u.searchParams.set('aid',id);
+          if(!u.searchParams.get('utm_source'))u.searchParams.set('utm_source','trackmyhairloss');
+          if(!u.searchParams.get('utm_campaign'))u.searchParams.set('utm_campaign','direct');
+          a.href=u.toString();
+          return;
+        }
         if(providerCode&&!u.searchParams.get('ref'))u.searchParams.set('ref',providerCode);
         if(!u.searchParams.get('aid'))u.searchParams.set('aid',id);
         if(!u.searchParams.get('utm_source'))u.searchParams.set('utm_source',source);

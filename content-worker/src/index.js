@@ -41,6 +41,16 @@ const adminOk = (req, env) => Boolean(env.ADMIN_TOKEN) && req.headers.get('x-adm
 const words = (html) => String(html || '').replace(/<[^>]+>/g,' ').trim().split(/\s+/).filter(Boolean).length;
 const SEO_MIN_IMPRESSIONS = 20;
 const SEO_MIN_REFRESH_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const HUMAN_STYLE_RULES = `Reader-facing style rules:
+- Never use em dashes. Prefer a clean period or comma.
+- Keep most sentences between roughly 10 and 20 words. Split sentences that carry several independent clauses.
+- Make the direct answer genuinely short: normally 2 to 4 sentences.
+- Keep titles focused on one search intent. Prefer roughly 55 to 75 characters and avoid cramming secondary promises into the H1.
+- Avoid canned transitions such as "The key is", "The most reliable way", "Here's how", and "It's important to note".
+- Do not stack hedges such as "typically", "usually", "often", and "generally". Use one only when the distinction matters.
+- Avoid repetitive symmetrical constructions and polished-sounding filler. Vary sentence and paragraph length naturally.
+- Do not use quantitative precision unless it is supported by supplied evidence or explicit factual input.
+- If a draft sounds machine-written, rewrite it rather than commenting on the problem.`;
 
 function b64url(input) {
   const bytes = input instanceof Uint8Array ? input : new TextEncoder().encode(String(input));
@@ -217,6 +227,49 @@ async function runSeoFeedbackLoop(env) {
   const analysis = await analyzeSeoFeedback(env).catch(e=>({ok:false,error:e?.message||String(e)}));
   const refresh = await executeOneSeoRefresh(env).catch(e=>({ok:false,error:e?.message||String(e)}));
   return {ok:Boolean(sync.ok && analysis.ok && refresh.ok),sync,analysis,refresh};
+}
+
+async function enqueueOperatorJob(env, mode, payload={}) {
+  const id = `operator:${crypto.randomUUID()}`;
+  await env.DB.prepare(`INSERT INTO content_runs (id,mode,stage,status,details_json) VALUES (?,?,?,?,?)`)
+    .bind(id,mode,'queued','queued',JSON.stringify({requested_at:nowIso(),payload})).run();
+  return {id,mode,status:'queued'};
+}
+
+async function recentOperatorJobs(env, limit=8) {
+  const rows = (await env.DB.prepare(`SELECT id,mode,stage,status,details_json,created_at
+    FROM content_runs WHERE mode IN ('operator_generate','operator_seo')
+    ORDER BY created_at DESC LIMIT ?`).bind(limit).all()).results || [];
+  return rows.map(r=>({...r,details:safeJson(r.details_json,{})}));
+}
+
+async function drainOperatorJobs(env) {
+  const job = await env.DB.prepare(`SELECT id,mode,details_json FROM content_runs
+    WHERE mode IN ('operator_generate','operator_seo') AND status='queued'
+    ORDER BY created_at ASC LIMIT 1`).first();
+  if (!job) return {ok:true,skipped:'no_operator_jobs'};
+
+  const claimed = await env.DB.prepare(`UPDATE content_runs SET stage='running',status='running'
+    WHERE id=? AND status='queued'`).bind(job.id).run();
+  if (!claimed?.meta?.changes) return {ok:true,skipped:'already_claimed'};
+
+  const details = safeJson(job.details_json,{});
+  try {
+    let result;
+    if (job.mode === 'operator_generate') {
+      const p = details.payload || {};
+      result = await generateOne(env,{mode:'manual',preferredType:p.preferredType||null,brief:p.brief||'',forcePublish:false});
+    } else {
+      result = await runSeoFeedbackLoop(env);
+    }
+    await env.DB.prepare(`UPDATE content_runs SET stage='complete',status=?,details_json=? WHERE id=?`)
+      .bind(result?.ok===false?'error':'ok',JSON.stringify({...details,completed_at:nowIso(),result}),job.id).run();
+    return {ok:result?.ok!==false,job_id:job.id,result};
+  } catch (error) {
+    await env.DB.prepare(`UPDATE content_runs SET stage='error',status='error',details_json=? WHERE id=?`)
+      .bind(JSON.stringify({...details,completed_at:nowIso(),error:error?.message||String(error)}),job.id).run();
+    return {ok:false,job_id:job.id,error:error?.message||String(error)};
+  }
 }
 
 function decodeXml(s='') {
@@ -661,7 +714,7 @@ function publicSources(sources) {
 
 async function writeDraft(env, candidate, sources) {
   const medical = candidate.safety_tier === 'medical';
-  const system = `You are a rigorous consumer-health editor writing for TrackMyHairLoss.com. Produce original, useful, direct prose. Do not write SEO filler. The first paragraph and answer_summary should answer the target query plainly enough to stand alone in a search or AI answer. ${medical ? 'This is medical-adjacent consumer education. Every claim about efficacy, adverse effects, indications, regulatory status, comparative outcomes, or treatment timelines must be supported by one or more supplied evidence IDs in square brackets, e.g. [P1] or [F3]. Never rely on unstated medical knowledge. Never prescribe a treatment to an individual.' : 'Stay within tracking, photography, organization, and comparison methodology; do not drift into treatment efficacy or diagnosis.'}`;
+  const system = `You are a rigorous consumer-health editor writing for TrackMyHairLoss.com. Produce original, useful, direct prose. Do not write SEO filler. The first paragraph and answer_summary should answer the target query plainly enough to stand alone in a search or AI answer. ${medical ? 'This is medical-adjacent consumer education. Every claim about efficacy, adverse effects, indications, regulatory status, comparative outcomes, or treatment timelines must be supported by one or more supplied evidence IDs in square brackets, e.g. [P1] or [F3]. Never rely on unstated medical knowledge. Never prescribe a treatment to an individual.' : 'Stay within tracking, photography, organization, and comparison methodology; do not drift into treatment efficacy or diagnosis.'}\n\n${HUMAN_STYLE_RULES}`;
   const user = `TARGET QUERY: ${candidate.target_query}\nPROPOSED ANGLE: ${candidate.suggested_title}\nCONTENT TYPE: ${candidate.content_type}\nRATIONALE: ${candidate.rationale}\n\nTOOLS YOU MAY LINK TO BY PATH:\n${TOOLS.map(t=>`${t.path} — ${t.name}: ${t.intent}`).join('\n')}\n\n${medical ? `EVIDENCE PACKET — THIS IS THE ONLY MEDICAL EVIDENCE YOU MAY USE:\n${evidenceForModel(sources)}` : ''}\n\nREQUIREMENTS:\n- 1,100-1,800 useful words unless the question is answered better with less.\n- Avoid generic introductions. Start with the answer.\n- Use descriptive H2/H3 headings that match actual reader subquestions.\n- For comparisons, include a compact HTML table near the top comparing the decision dimensions that the evidence supports. Do not force a winner.\n- Explain evidence quality/limitations when relevant.\n- Distinguish FDA-approved indications from off-label use when evidence packet allows that conclusion.\n- Do not tell a reader to start, stop, increase, decrease, combine, or switch a drug.\n- Do not create dosing instructions beyond accurately describing supplied label information when directly necessary.\n- Do not invent statistics, trial outcomes, mechanisms, side effects, timelines, citations, or expert quotes.\n- Use citation markers exactly like [P1] [F2] immediately after supported medical claims. Multiple markers are allowed.\n- Include a short section explaining what a reader could track over time if relevant.\n- Link selection is returned separately in related_tool_paths; do not write external links into body_html.\n- body_html may use only p,h2,h3,ul,ol,li,strong,em,table,thead,tbody,tr,th,td. No attributes.\n- FAQ answers must be concise and directly answer the question.\n- description <= 155 characters. dek <= 240 characters.\n- Title should be specific, natural and non-clickbait. No year suffix unless recency is intrinsically relevant.
 - Do not mention AI, an evidence packet, an editor, our methodology, our publishing process, or phrases such as 'source-grounded' in reader-facing copy. Present the information and citations directly.
 - Avoid repetitive title formulas such as 'what the evidence actually shows' unless that wording is genuinely the clearest match for the query.`;
@@ -670,7 +723,8 @@ async function writeDraft(env, candidate, sources) {
 
 async function editDraft(env, candidate, sources, draft) {
   const medical = candidate.safety_tier === 'medical';
-  const system = `You are the final hostile editor for TrackMyHairLoss.com. Your job is to reject unsupported, repetitive, vague, manipulative or medically overconfident copy. Preserve useful specificity. ${medical ? 'Audit every medical claim against the evidence packet. A claim without support in the packet must be removed or softened to a non-medical statement. Citation markers must identify evidence that actually supports the immediately preceding claim.' : 'Reject drift into diagnosis or treatment recommendations.'}`;
+  const system = `You are the final hostile editor for TrackMyHairLoss.com. Your job is to reject unsupported, repetitive, vague, manipulative or medically overconfident copy. Preserve useful specificity. ${medical ? 'Audit every medical claim against the evidence packet. A claim without support in the packet must be removed or softened to a non-medical statement. Citation markers must identify evidence that actually supports the immediately preceding claim.' : 'Reject drift into diagnosis or treatment recommendations.'}\n\n${HUMAN_STYLE_RULES}
+Act as a line editor, not a scorer. Rewrite synthetic cadence, awkward punctuation, bloated sentences, and keyword-stuffed titles before returning the cleaned full version. A publish verdict means the returned copy itself follows these style rules.`;
   const user = `${medical ? `EVIDENCE PACKET:\n${evidenceForModel(sources)}\n\n` : ''}CANDIDATE:\n${JSON.stringify(candidate)}\n\nDRAFT:\n${JSON.stringify(draft)}\n\nEDITORIAL CHECKS:\n1. Does the page answer its target query immediately and clearly?\n2. Is there meaningful information gain beyond generic search-result paraphrase?\n3. Does every medical efficacy/safety/regulatory claim have an evidence marker whose source actually supports it?\n4. Does the copy avoid individualized treatment recommendations?\n5. Does it avoid invented numbers, fake certainty, filler, keyword repetition and boilerplate?\n6. Are headings useful as standalone retrieval chunks for search/AI systems?\n7. Are FAQs non-duplicative and actually useful?\n8. For a comparison, is the table neutral and supported rather than declaring an unsupported winner?\n\nReturn a cleaned full version. verdict=publish only if it is safe and supportable; verdict=revise if useful but still requires human review; verdict=reject if evidence is inadequate or the premise is misleading.`;
   return aiJson(env, editorSchema(), system, user, {maxTokens:7600, temperature:0.15, reasoningEffort:'high'});
 }
@@ -928,6 +982,7 @@ async function recentArticlesJson(env) {
 
 async function renderIndex(env, kind) {
   const map = {
+    articles:{types:['tracking_guide','question','treatment_comparison','treatment_profile'],title:'Articles',h1:'Hair progress and treatment research.',dek:'Browse every published guide, explainer, treatment comparison, and treatment research page.'},
     blog:{types:['tracking_guide','question'],title:'Guides',h1:'How to track hair progress.',dek:'Practical guides to taking consistent photos, comparing change over time, and keeping a useful record.'},
     compare:{types:['treatment_comparison'],title:'Treatment comparisons',h1:'Compare hair-loss treatments.',dek:'Sourced comparisons of common treatments, including route, regulatory status, study results, side effects, and important limitations.'},
     treatments:{types:['treatment_profile'],title:'Treatments',h1:'Research on common hair-loss treatments.',dek:'Treatment pages covering study results, regulatory status, side effects, practical differences, and limitations.'}
@@ -950,7 +1005,7 @@ async function feedXml(env) {
 async function sitemap(env) {
   const rows = (await env.DB.prepare("SELECT slug,content_type,published_at,updated_at FROM content_pages WHERE status='published' ORDER BY published_at DESC").all()).results || [];
   const base = baseUrl(env);
-  const staticUrls = ['/', '/comparator/','/photo-audit/','/contact-sheet/','/framing-grid/','/check-in-log/','/photo-guide/','/timeline/','/providers/','/blog','/compare','/treatments'];
+  const staticUrls = ['/', '/comparator/','/photo-audit/','/contact-sheet/','/framing-grid/','/check-in-log/','/photo-guide/','/timeline/','/providers/','/articles','/blog','/compare','/treatments'];
   const urls = staticUrls.map(path=>({loc:`${base}${path}`,lastmod:null})).concat(rows.map(p=>({loc:`${base}${contentPath(p)}`,lastmod:p.updated_at||p.published_at})));
   const xml = `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map(u=>`<url><loc>${esc(u.loc)}</loc>${u.lastmod?`<lastmod>${esc(new Date(u.lastmod).toISOString())}</lastmod>`:''}</url>`).join('')}</urlset>`;
   return new Response(xml,{headers:{'content-type':'application/xml;charset=utf-8','cache-control':'public, max-age=300'}});
@@ -1000,6 +1055,7 @@ export default {
     if (path==='/feed.xml') return feedXml(env);
     if (path==='/llms.txt') return llmsTxt(env);
     if (path==='/indexnow-key.txt') return new Response(env.INDEXNOW_KEY || '',{headers:{'content-type':'text/plain;charset=utf-8'}});
+    if (path==='/articles') return renderIndex(env,'articles');
     if (path==='/blog') return renderIndex(env,'blog');
     if (path==='/compare') return renderIndex(env,'compare');
     if (path==='/treatments') return renderIndex(env,'treatments');
@@ -1008,7 +1064,7 @@ export default {
     if (path.startsWith('/treatments/')) return renderArticle(env,decodeURIComponent(path.slice(12)),'treatment_profile');
 
     if (path.startsWith('/__') && !adminOk(req,env)) return new Response('Unauthorized',{status:401});
-    if (path==='/__status') { const last=await env.DB.prepare("SELECT published_at FROM content_pages WHERE status='published' AND published_at IS NOT NULL ORDER BY published_at DESC LIMIT 1").first(); const lastRuns=(await env.DB.prepare("SELECT mode,stage,status,details_json,created_at FROM content_runs ORDER BY created_at DESC LIMIT 12").all()).results||[]; return Response.json({ok:true,model:MODEL,due:await due(env),auto_writer:String(env.AUTO_WRITER||'true').toLowerCase()!=='false',publish_gap_hours:MIN_PUBLISH_GAP_MS/3600000,last_published_at:last?.published_at||null,workers_ai_configured:Boolean(env.AI),indexnow_configured:Boolean(env.INDEXNOW_KEY),auto_publish_standard:env.AUTO_PUBLISH_STANDARD,auto_publish_medical:env.AUTO_PUBLISH_MEDICAL,seo_autopilot:env.SEO_AUTOPILOT,seo_refresh_medical:env.SEO_REFRESH_MEDICAL,gsc_configured:Boolean(env.GSC_SERVICE_ACCOUNT_JSON),recent_runs:lastRuns,posts:await listAdmin(env)}); }
+    if (path==='/__status') { const last=await env.DB.prepare("SELECT published_at FROM content_pages WHERE status='published' AND published_at IS NOT NULL ORDER BY published_at DESC LIMIT 1").first(); const lastRuns=(await env.DB.prepare("SELECT mode,stage,status,details_json,created_at FROM content_runs ORDER BY created_at DESC LIMIT 12").all()).results||[]; return Response.json({ok:true,model:MODEL,due:await due(env),auto_writer:String(env.AUTO_WRITER||'true').toLowerCase()!=='false',publish_gap_hours:MIN_PUBLISH_GAP_MS/3600000,last_published_at:last?.published_at||null,workers_ai_configured:Boolean(env.AI),indexnow_configured:Boolean(env.INDEXNOW_KEY),auto_publish_standard:env.AUTO_PUBLISH_STANDARD,auto_publish_medical:env.AUTO_PUBLISH_MEDICAL,seo_autopilot:env.SEO_AUTOPILOT,seo_refresh_medical:env.SEO_REFRESH_MEDICAL,gsc_configured:Boolean(env.GSC_SERVICE_ACCOUNT_JSON),recent_runs:lastRuns,jobs:await recentOperatorJobs(env),posts:await listAdmin(env)}); }
     if (path==='/__ai-test' && req.method==='POST') {
       const result = await env.AI.run(MODEL, {
         messages:[{role:'user',content:'Reply with exactly the word OK.'}],
@@ -1030,14 +1086,17 @@ export default {
     }
     if (path==='/__generate' && req.method==='POST') {
       const body = await req.json().catch(()=>({}));
-      const out = await generateOne(env,{mode:'manual',preferredType:body.preferredType||null,brief:body.brief||'',forcePublish:Boolean(body.forcePublish)});
-      return Response.json(out);
+      const job = await enqueueOperatorJob(env,'operator_generate',{preferredType:body.preferredType||null,brief:body.brief||''});
+      return Response.json({ok:true,queued:true,job},{status:202});
     }
     if (path.startsWith('/__publish/') && req.method==='POST') return Response.json(await publishDraft(env,decodeURIComponent(path.slice(11))));
     if (path==='/__signals' && req.method==='POST') return Response.json(await ingestSignals(env,await req.json()));
     if (path==='/__seo-sync' && req.method==='POST') return Response.json(await syncGoogleSearchConsole(env));
     if (path==='/__seo-analyze' && req.method==='POST') return Response.json(await analyzeSeoFeedback(env));
-    if (path==='/__seo-run' && req.method==='POST') return Response.json(await runSeoFeedbackLoop(env));
+    if (path==='/__seo-run' && req.method==='POST') {
+      const job = await enqueueOperatorJob(env,'operator_seo',{});
+      return Response.json({ok:true,queued:true,job},{status:202});
+    }
     if (path==='/__seo-actions') {
       const rows = (await env.DB.prepare(`SELECT id,page,slug,query,action_type,score,reason,status,created_at,executed_at FROM seo_actions ORDER BY created_at DESC LIMIT 100`).all()).results || [];
       return Response.json({ok:true,actions:rows});
@@ -1051,6 +1110,11 @@ export default {
     }
   },
   async scheduled(controller, env, ctx) {
+    const cron=controller?.cron||'';
+    if (cron==='*/5 * * * *') {
+      ctx.waitUntil(drainOperatorJobs(env).catch(e=>console.log('operator_job_error',e?.stack||String(e))));
+      return;
+    }
     ctx.waitUntil(scheduledRun(env).catch(e=>console.log('scheduled_error',e?.stack||String(e))));
   }
 };
