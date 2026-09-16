@@ -16,6 +16,8 @@
     "db:migrate:v3:local": "wrangler d1 execute baldwin-growth --local --file=./migration-v3.sql",
     "db:migrate:v4:remote": "wrangler d1 execute baldwin-growth --remote --file=./migration-v4.sql",
     "db:migrate:v4:local": "wrangler d1 execute baldwin-growth --local --file=./migration-v4.sql",
+    "db:migrate:v5:remote": "wrangler d1 execute baldwin-growth --remote --file=./migration-v5.sql",
+    "db:migrate:v5:local": "wrangler d1 execute baldwin-growth --local --file=./migration-v5.sql",
     "test": "node --test test/*.test.js"
   },
   "devDependencies": {
