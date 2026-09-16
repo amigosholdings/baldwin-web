@@ -1,5 +1,5 @@
 name = "baldwin-growth-api"
-main = "src/agentIndex.js"
+main = "src/secureIndex.js"
 compatibility_date = "2026-09-01"
 
 [vars]
@@ -18,6 +18,10 @@ database_id = "48fcce74-b672-40aa-8080-9a04021cd5b9"
 binding = "CONTENT"
 service = "trackmyhairloss-content"
 
+# Agent endpoints are protected by an expiring GTM-only capability minted from
+# the existing server-side ADMIN_TOKEN. The master token is never persisted by
+# the agent console and cannot be used directly against /v1/admin/agent/*.
+#
 # Secret used by baldwin-api to relay authenticated app lifecycle events into
 # this canonical Growth API event store. Configure the same value on both Workers:
 # npx wrangler secret put APP_EVENT_SECRET
