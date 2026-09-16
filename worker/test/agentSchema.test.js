@@ -4,7 +4,7 @@ import { agentSchemaStatements } from '../src/agentSchema.js';
 
 test('agent schema is split into complete D1 statements', () => {
   const statements = agentSchemaStatements();
-  assert.equal(statements.length, 15);
+  assert.equal(statements.length, 16);
   for (const statement of statements) {
     assert.match(statement, /^CREATE (TABLE|INDEX) IF NOT EXISTS /);
     assert.doesNotMatch(statement, /;\s*$/);
