@@ -2,6 +2,7 @@ const API = 'https://baldwin-growth-api.threeamigosholdings.workers.dev';
 const $ = id => document.getElementById(id);
 let TOKEN = localStorage.getItem('baldwin_agent_token') || '';
 let DATA = null;
+let LAST_PROSPECT_RESULTS = [];
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
 const pct = (a,b) => Number(b) ? `${Math.round(Number(a||0)/Number(b)*100)}%` : '—';
@@ -96,6 +97,27 @@ function parseBatch(id, key) {
   throw new Error(`Expected an array or {${key}:[...]}.`);
 }
 
+function canonicalProspectMapping() {
+  const latest = LAST_PROSPECT_RESULTS.filter(x => x?.ok && x?.outreach_id).map(x => ({
+    index: x.index,
+    outreach_id: x.outreach_id,
+    practice_name: x.practice_name || '',
+    email: x.email || '',
+    domain: x.domain || '',
+    action: x.action || '',
+    suppressed: Boolean(x.suppressed)
+  }));
+  if (latest.length) return latest;
+  return (DATA?.prospects || []).slice(0, 100).map(x => ({
+    outreach_id: x.id,
+    practice_name: x.practice_name || '',
+    email: x.email || '',
+    domain: x.domain || '',
+    decision_status: x.decision_status || '',
+    last_run_id: x.last_run_id || ''
+  })).filter(x => x.outreach_id);
+}
+
 function render() {
   const s = DATA.summary || {}, g = DATA.guardrails || {};
   const items = [
@@ -117,6 +139,11 @@ function render() {
 
   const runs = DATA.recent_runs || [];
   $('runSelect').innerHTML = `<option value="">Select a run</option>` + runs.map(r => `<option value="${esc(r.id)}" ${r.status === 'running' ? 'selected' : ''}>${esc(r.created_at)} · ${esc(r.status)} · ${esc((r.hypothesis || '').slice(0,70))}</option>`).join('');
+
+  const prospects = DATA.prospects || [];
+  $('prospectCount').textContent = `${prospects.length} loaded`;
+  $('prospectResultJson').textContent = JSON.stringify(canonicalProspectMapping(), null, 2);
+  $('prospectRows').innerHTML = prospects.length ? prospects.map(x => `<tr><td class="mono">${esc(x.id)}</td><td><b>${esc(x.practice_name)}</b><div class="muted">${esc(x.city || '')}${x.state ? ` · ${esc(x.state)}` : ''}</div></td><td>${esc(x.email || '')}</td><td class="mono">${esc(x.domain || '')}</td><td>${x.fit_score ?? '—'}</td><td>${esc(x.decision_status || x.stage || '')}${Number(x.do_not_contact) ? '<div><span class="pill failed">suppressed</span></div>' : ''}</td><td class="mono">${esc(x.last_run_id || '')}</td></tr>`).join('') : '<tr><td colspan="7">No stored prospects yet.</td></tr>';
 
   const q = DATA.message_queue || [];
   $('queueCount').textContent = `${q.filter(x => x.status === 'queued').length} queued`;
@@ -164,7 +191,10 @@ $('applyProspects').addEventListener('click', async () => {
     const prospects = parseBatch('prospectsJson','prospects'), run_id = activeRun();
     if (!run_id) throw new Error('Select an active run first.');
     const r = await api('/v1/admin/agent/prospects', { method:'POST', body:JSON.stringify({run_id,prospects}) });
-    await load(); status(`Research stored: ${r.succeeded}/${r.received}.`);
+    LAST_PROSPECT_RESULTS = Array.isArray(r.results) ? r.results : [];
+    await load();
+    const ids = LAST_PROSPECT_RESULTS.filter(x => x?.ok && x?.outreach_id).length;
+    status(`Research stored: ${r.succeeded}/${r.received} · ${ids} canonical outreach IDs exposed below.`);
   } catch (e) { status(e.message, true); }
 });
 
