@@ -93,15 +93,26 @@ CREATE INDEX IF NOT EXISTS idx_agent_events_action ON agent_events(action, creat
 
 const REQUIRED_TABLES = ['agent_runs','agent_profiles','agent_message_queue','agent_events'];
 
+export function agentSchemaStatements() {
+  return AGENT_SCHEMA
+    .split(';')
+    .map(statement => statement.trim())
+    .filter(Boolean);
+}
+
 export async function ensureAgentSchema(env) {
-  if (!env.DB?.prepare || !env.DB?.exec) throw new Error('DB_not_configured');
+  if (!env.DB?.prepare) throw new Error('DB_not_configured');
   const placeholders = REQUIRED_TABLES.map(() => '?').join(',');
   const row = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN (${placeholders})`
   ).bind(...REQUIRED_TABLES).first();
   if (Number(row?.n || 0) === REQUIRED_TABLES.length) return { ready: true, initialized: false };
-  const result = await env.DB.exec(AGENT_SCHEMA);
-  return { ready: true, initialized: true, statements: Number(result?.count || 0) };
+
+  const statements = agentSchemaStatements();
+  for (const statement of statements) {
+    await env.DB.prepare(statement).run();
+  }
+  return { ready: true, initialized: true, statements: statements.length };
 }
 
 export { AGENT_SCHEMA };
