@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { issueCapability, validateCapability } from '../src/secureIndex.js';
+import { issueCapability, validateCapability } from '../src/secureIndex2.js';
 
 const SECRET = 'test-admin-secret-that-is-not-used-in-production';
 const NOW = 1_800_000_000;
