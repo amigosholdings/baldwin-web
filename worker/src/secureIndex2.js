@@ -3,7 +3,30 @@ import { ensureAgentSchema } from './agentSchema.js';
 
 const AGENT_PREFIX = '/v1/admin/agent/';
 const ISSUE_PATH = '/v1/admin/agent-token';
+const RUNS_PATH = '/v1/admin/agent/runs';
 const encoder = new TextEncoder();
+
+export const AGENT_RUN_INSERT_SQL = `
+  INSERT INTO agent_runs(id,status,agent_name,hypothesis,strategy_json,experiment_json,target_discovery,target_research,target_send,strategy_summary)
+  VALUES(?,'running',?,?,?,?,?,?,?,?)
+`;
+
+function clean(value, max = 4000) {
+  return String(value ?? '').trim().slice(0, max);
+}
+
+function safeJson(value, fallback = {}) {
+  if (value == null || value === '') return JSON.stringify(fallback);
+  if (typeof value === 'string') {
+    try { JSON.parse(value); return value; } catch { return JSON.stringify({ text: clean(value, 12000) }); }
+  }
+  try { return JSON.stringify(value); } catch { return JSON.stringify(fallback); }
+}
+
+function maxDailySends(env) {
+  const n = Number(env.AGENT_MAX_DAILY_SENDS || 40);
+  return Math.max(1, Math.min(100, Number.isFinite(n) ? Math.trunc(n) : 40));
+}
 
 function allowedOrigin(request, env) {
   const origin = request.headers.get('Origin');
@@ -81,6 +104,32 @@ async function authenticateAdmin(request, env) {
   return constantTimeEqual(request.headers.get('x-admin-token') || '', env.ADMIN_TOKEN);
 }
 
+async function createAgentRun(request, env) {
+  const schema = await ensureAgentSchema(env);
+  let body = {};
+  try { body = await request.json(); } catch {}
+  const targetSend = Math.max(0, Number(body.target_send ?? body.targetSend ?? 0) || 0);
+  const max = maxDailySends(env);
+  if (targetSend > max) return json(request, env, { error: 'target_send_exceeds_guardrail', max }, 400);
+
+  const id = crypto.randomUUID();
+  await env.DB.prepare(AGENT_RUN_INSERT_SQL).bind(
+    id,
+    clean(body.agent_name || body.agentName || 'ChatGPT GTM', 120),
+    clean(body.hypothesis, 2000),
+    safeJson(body.strategy || body.strategy_json || {}),
+    safeJson(body.experiment || body.experiment_json || {}),
+    Math.max(0, Number(body.target_discovery ?? body.targetDiscovery ?? 0) || 0),
+    Math.max(0, Number(body.target_research ?? body.targetResearch ?? 0) || 0),
+    targetSend,
+    clean(body.strategy_summary || body.strategySummary, 3000)
+  ).run();
+
+  return json(request, env, { ok: true, run_id: id, max_daily_sends: max }, 201, {
+    'x-baldwin-agent-schema': schema.initialized ? 'initialized' : 'ready'
+  });
+}
+
 async function delegateAgent(request, env, ctx) {
   const schema = await ensureAgentSchema(env);
   const headers = new Headers(request.headers);
@@ -117,6 +166,9 @@ export default {
         if (request.method === 'GET' && path === '/v1/admin/agent/health') {
           const schema = await ensureAgentSchema(env);
           return json(request, env, { ok: true, gateway: 'ready', schema });
+        }
+        if (request.method === 'POST' && path === RUNS_PATH) {
+          return await createAgentRun(request, env);
         }
         return await delegateAgent(request, env, ctx);
       } catch (error) {
