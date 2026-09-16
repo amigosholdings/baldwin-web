@@ -1,5 +1,5 @@
 name = "baldwin-growth-api"
-main = "src/secureIndex.js"
+main = "src/secureIndex2.js"
 compatibility_date = "2026-09-01"
 
 [vars]
@@ -21,6 +21,7 @@ service = "trackmyhairloss-content"
 # Agent endpoints are protected by an expiring GTM-only capability minted from
 # the existing server-side ADMIN_TOKEN. The master token is never persisted by
 # the agent console and cannot be used directly against /v1/admin/agent/*.
+# Agent schema checks are request-local; do not cache D1 promises across requests.
 #
 # Secret used by baldwin-api to relay authenticated app lifecycle events into
 # this canonical Growth API event store. Configure the same value on both Workers:
