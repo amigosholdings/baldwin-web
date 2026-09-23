@@ -18,7 +18,16 @@ function appStoreUrl(env={},campaignToken=null){return withAppleCampaign(APP_STO
 async function apiFetch(env,path,init={}){const base=clean(env.GROWTH_API_URL||DEFAULT_GROWTH_API,240).replace(/\/+$/,'');const c=new AbortController(),t=setTimeout(()=>c.abort(),2200);try{return await fetch(base+path,{...init,signal:c.signal})}finally{clearTimeout(t)}}
 async function lookupProvider(env,code){if(!code)return null;try{const r=await apiFetch(env,'/v1/providers/'+encodeURIComponent(code),{headers:{accept:'application/json'}});if(!r.ok)return null;const p=await r.json();return p&&providerCode(p.code)===code?p:null}catch{return null}}
 async function record(env,payload){try{await apiFetch(env,'/v1/events',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})}catch{}}
-function campaignFor(env,isProviderTraffic){return isProviderTraffic?appleCampaignToken(env.APP_STORE_PROVIDER_CAMPAIGN_TOKEN):appleCampaignToken(env.APP_STORE_WEBSITE_CAMPAIGN_TOKEN)}
+function campaignFor(env,isProviderTraffic,source=''){
+  if(isProviderTraffic)return appleCampaignToken(env.APP_STORE_PROVIDER_CAMPAIGN_TOKEN);
+  const s=clean(source,80).toLowerCase();
+  const mapped=
+    s==='reddit'||s==='reddit_organic'||s==='reddit_paid' ? env.APP_STORE_REDDIT_CAMPAIGN_TOKEN :
+    s==='creator'||s==='youtube'||s==='instagram'||s==='tiktok' ? env.APP_STORE_CREATOR_CAMPAIGN_TOKEN :
+    s==='seo'||s==='search'||s==='trackmyhairloss' ? env.APP_STORE_SEO_CAMPAIGN_TOKEN :
+    null;
+  return appleCampaignToken(mapped)||appleCampaignToken(env.APP_STORE_WEBSITE_CAMPAIGN_TOKEN);
+}
 function isLikelyBot(request){return /bot|crawler|spider|preview|facebookexternalhit|twitterbot|slackbot|discordbot|whatsapp/i.test(request.headers.get('user-agent')||'')}
 export async function onRequest(context){
   const {request,env}=context;
@@ -27,7 +36,7 @@ export async function onRequest(context){
   const source=clean(url.searchParams.get('utm_source')||'getbaldwin',80),campaign=clean(url.searchParams.get('utm_campaign')||url.searchParams.get('c')||'download',120);
   const rid=opaque(url.searchParams.get('rid'))||crypto.randomUUID();
   const provider=await lookupProvider(env,ref);
-  const effectiveRef=provider?ref:null,isProviderTraffic=Boolean(provider)&&(source==='trybaldwin'||campaign==='provider_referral'),appleCampaign=campaignFor(env,isProviderTraffic);
+  const effectiveRef=provider?ref:null,isProviderTraffic=Boolean(provider)&&(source==='trybaldwin'||campaign==='provider_referral'),appleCampaign=campaignFor(env,isProviderTraffic,source);
   const destination=provider&&offerCode(provider.appleOfferCode)?'offer_code':'app_store';
   const shouldTrack=request.method==='GET'&&!isLikelyBot(request);
   if(shouldTrack)context.waitUntil(record(env,{event:'app_store_redirect',providerCode:effectiveRef,anonymousId,source,campaign,idempotencyKey:`app_store_redirect:${rid}`,metadata:{destination,placement:clean(url.searchParams.get('c'),80),apple_campaign:appleCampaign||null,apple_campaign_enabled:Boolean(appleProviderToken(env.APP_STORE_PROVIDER_TOKEN)&&appleCampaign)}}));
@@ -37,4 +46,4 @@ export async function onRequest(context){
   }
   return Response.redirect(appStoreUrl(env,appleCampaign),302);
 }
-export {appStoreUrl,appleCampaignToken,appleProviderToken,offerCode,opaque,providerCode,redemptionUrl,withAppleCampaign};
+export {appStoreUrl,appleCampaignToken,appleProviderToken,campaignFor,offerCode,opaque,providerCode,redemptionUrl,withAppleCampaign};
