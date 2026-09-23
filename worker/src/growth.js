@@ -2,7 +2,7 @@ const PROVIDER_RE=/^[a-z0-9][a-z0-9-]{0,63}$/;
 const OFFER_RE=/^[A-Z0-9]{1,64}$/;
 const OPAQUE_RE=/^[A-Za-z0-9._:-]+$/;
 const SENSITIVE_KEY=/(photo|image|treatment|medical|health|diagnos|symptom|note|history|email|name|token|receipt|password|secret)/i;
-export const GROWTH_EVENT_NAMES=new Set(['landing_view','referral_view','download_click','provider_offer_redirect','app_store_redirect','attributed_install','attributed_open','app_signup','baseline_complete','second_session','subscription_started','tool_used','tool_open','tool_cta_click','blog_view','blog_cta_click']);
+export const GROWTH_EVENT_NAMES=new Set(['experiment_exposure','landing_view','referral_view','download_click','provider_offer_redirect','app_store_redirect','attributed_install','attributed_open','app_signup','baseline_complete','second_session','subscription_started','tool_used','tool_open','tool_cta_click','blog_view','blog_cta_click']);
 const CONVERSIONS=new Set(['app_signup','baseline_complete','second_session','subscription_started']);
 function clean(v,max=120){if(typeof v!=='string')return null;const s=v.trim();return s?s.slice(0,max):null}
 export function normalizeProviderCode(v){if(typeof v!=='string')return null;const s=v.trim().toLowerCase();return s.length<=64&&PROVIDER_RE.test(s)?s:null}
