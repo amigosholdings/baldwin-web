@@ -37,8 +37,8 @@ gtag('js',new Date());gtag('config','G-6FX9XXF3JK');
     <div class="container hero-grid">
       <div class="hero-copy">
         <div class="eyebrow">Hair progress, in one place</div>
-        <h1>See whether your hair is actually changing.</h1>
-        <p>Baldwin lines up repeat photos with your treatment history, so you can compare months instead of scrolling through your camera roll.</p>
+        <h1 id="hero-positioning-title">See whether your hair is actually changing.</h1>
+        <p id="hero-positioning-copy">Baldwin lines up repeat photos with your treatment history, so you can compare months instead of scrolling through your camera roll.</p>
         <div class="hero-actions">
           <a class="button button-primary" href="/download?c=website_hero">Get Baldwin</a>
           <a class="button button-secondary" href="#features">See how it works</a>
@@ -145,6 +145,29 @@ gtag('js',new Date());gtag('config','G-6FX9XXF3JK');
   </div>
 </footer>
 <script src="/assets/growth.js"></script>
-<script>BaldwinGrowth.event('landing_view',{surface:'homepage'})</script>
+<script>
+(function(){
+  const experiment='homepage_positioning_v1';
+  const variant=BaldwinGrowth.assignExperiment(experiment,['control','treatment_working','track_without_guessing']);
+  const copy={
+    control:{
+      title:'See whether your hair is actually changing.',
+      body:'Baldwin lines up repeat photos with your treatment history, so you can compare months instead of scrolling through your camera roll.'
+    },
+    treatment_working:{
+      title:'See whether your hair-loss treatment is working.',
+      body:'Track repeatable photos beside your treatment timeline so you can judge progress from comparable evidence instead of memory.'
+    },
+    track_without_guessing:{
+      title:'Track hair progress without guessing.',
+      body:'Build a consistent photo record around your routine, then compare the same views over time instead of relying on random selfies.'
+    }
+  }[variant];
+  document.getElementById('hero-positioning-title').textContent=copy.title;
+  document.getElementById('hero-positioning-copy').textContent=copy.body;
+  BaldwinGrowth.event('experiment_exposure',{experiment,variant,surface:'homepage'});
+  BaldwinGrowth.event('landing_view',{surface:'homepage'});
+})();
+</script>
 </body>
 </html>
