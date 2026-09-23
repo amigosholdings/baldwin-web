@@ -10,11 +10,21 @@
 </head>
 <body>
 <nav><div class="wrap navrow"><a class="brand" href="/ops-agent/">Baldwin<small>GTM agent control room</small></a><div class="mono">Restricted agent surface</div></div></nav>
-<header><div class="wrap"><div class="kicker">Internal / ChatGPT-operated</div><h1>Autonomous provider acquisition.</h1><p class="lead">ChatGPT researches, selects, writes, follows up, and optimizes. The Growth Worker stores state and executes only explicit agent decisions. The console uses a scoped, expiring GTM capability; the master admin credential is never retained here.</p><div id="bootstrap" class="bootstrap hidden"><p><b>One-time session setup.</b> Paste the Baldwin ADMIN_TOKEN once to mint a restricted 30-day GTM credential. The admin token is immediately cleared and is never written to browser storage.</p><div class="auth"><input id="adminToken" type="password" autocomplete="off" placeholder="ADMIN_TOKEN (used once, never stored)"><button id="createSession" class="btn primary">Create restricted agent session</button></div><div class="securitynote">Stored capability scope: GTM agent routes only · maximum lifetime 30 days · server-side send/suppression guardrails remain enforced.</div></div><div id="status" class="status"></div></div></header>
+<header><div class="wrap"><div class="kicker">Internal / ChatGPT-operated</div><h1>Baldwin Growth OS.</h1><p class="lead">ChatGPT manages acquisition experiments across providers, search, App Store, creators, and public community opportunities. The Growth Worker stores state, enforces spend and outreach guardrails, and executes only explicit agent decisions. The console uses a scoped, expiring GTM capability; the master admin credential is never retained here.</p><div id="bootstrap" class="bootstrap hidden"><p><b>One-time session setup.</b> Paste the Baldwin ADMIN_TOKEN once to mint a restricted 30-day GTM credential. The admin token is immediately cleared and is never written to browser storage.</p><div class="auth"><input id="adminToken" type="password" autocomplete="off" placeholder="ADMIN_TOKEN (used once, never stored)"><button id="createSession" class="btn primary">Create restricted agent session</button></div><div class="securitynote">Stored capability scope: GTM agent routes only · maximum lifetime 30 days · server-side send/suppression guardrails remain enforced.</div></div><div id="status" class="status"></div></div></header>
 <main><div class="wrap"><div id="app" class="hidden">
   <div class="btnrow"><button id="load" class="btn">Refresh context</button><button id="forget" class="btn">Remove agent session</button></div>
   <div id="kpis" class="kpis"></div>
   <div id="guardrails" class="guardrails"></div>
+
+
+  <section class="section"><div class="sectionhead"><div><h2>Growth portfolio</h2><p>One ledger for the $200 acquisition authorization. Optimize for baseline completion and paid starts, not vanity engagement.</p></div></div>
+    <div id="growthBudget" class="kpis"></div>
+    <div class="tablewrap"><table><thead><tr><th>Experiment</th><th>Channel</th><th>Status</th><th>Spend / cap</th><th>Variants</th><th>Baselines</th><th>Paid starts</th></tr></thead><tbody id="growthExperimentRows"></tbody></table></div>
+  </section>
+
+  <section class="section"><div class="sectionhead"><div><h2>Public community opportunity queue</h2><p>Topic/thread discovery only. No profiling or DMs based on an individual’s health status; posting remains approval-gated.</p></div></div>
+    <div class="tablewrap"><table><thead><tr><th>Platform</th><th>Community</th><th>Topic</th><th>Intent</th><th>Status</th><th>Draft</th></tr></thead><tbody id="communityRows"></tbody></table></div>
+  </section>
 
   <section class="section"><div class="sectionhead"><div><h2>Daily run</h2><p>Start one run, then let the agent research a broad candidate pool and explicitly choose what enters the send queue.</p></div></div>
     <div class="card"><div class="controls"><input id="hypothesis" class="wide" placeholder="Hypothesis / targeting thesis"><input id="discover" type="number" value="50" min="0" placeholder="Discover"><input id="research" type="number" value="30" min="0" placeholder="Research"><input id="sendTarget" type="number" value="20" min="0" placeholder="Send"><button id="startRun" class="btn green">Start run</button></div><div class="runline"><label class="mono">Active run</label><select id="runSelect"></select><button id="sendRun" class="btn blue">Send queued for run</button><button id="completeRun" class="btn">Complete run</button></div></div>
