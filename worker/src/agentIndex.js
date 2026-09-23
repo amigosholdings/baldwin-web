@@ -1,4 +1,5 @@
 import base from './index.js';
+import { handleGrowthOs } from './growthOs.js';
 
 const DECISIONS = new Set(['send_initial','follow_up','reply','hold','reject']);
 const MESSAGE_KINDS = new Set(['initial','follow_up','reply']);
@@ -474,6 +475,11 @@ async function handleAgent(request, env, path) {
       clean(body.strategy_summary || body.strategySummary,3000),clean(body.next_strategy || body.nextStrategy,4000),safeJson(body.observations || body.observations_json || {}),runId).run();
     if (!result.meta?.changes) return json(request, env, { error: 'run_not_found' }, 404);
     return json(request, env, { ok: true, run_id: runId, counts });
+  }
+
+  if (path.startsWith('/v1/admin/agent/growth')) {
+    try { return json(request, env, await handleGrowthOs(request, env, path)); }
+    catch (error) { return json(request, env, { error: clean(error?.message, 400) || 'growth_os_failed' }, 400); }
   }
 
   return json(request, env, { error: 'agent_route_not_found' }, 404);
