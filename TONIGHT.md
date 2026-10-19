@@ -97,17 +97,16 @@ Later send `baseline_complete`, `second_session`, and `subscription_started` usi
 - `getbaldwin.app`: app conversion/download destination.
 - `regrowth.app`: keep parked/redirected for now. Do not split the first experiment across multiple acquisition domains.
 
-## 8. $300 budget
+## 8. $200 aggregate acquisition authorization
 
-Spend $0 on new software tonight. Cloudflare + the existing email list already cover the infrastructure required to test the loop.
+The authoritative aggregate authorization is **$200 total**, shared by all consumer-acquisition experiments. See `GROWTH_OS.md` and the D1 budget row `consumer-acquisition-2026-09-22`. This is a ceiling, **not** permission to initiate spending. Obtain explicit authorization before incurring any charge, and verify remaining funds in the live spend ledger first.
 
-Hold the $300 until the first 20–30 provider contacts and initial comparator traffic produce a baseline. Then spend only against the bottleneck:
+- Apple Ads Advanced high-intent search test: **up to $150**, contingent on separate spending approval and working downstream attribution.
+- Creator test / contingency: **up to $50**, contingent on separate spending approval and a suitable public business partnership.
+- Both allocations are maximums within the same $200 aggregate authorization, not additional budgets. Do not expand, replenish, or double-count them.
+- New software, purchased lead lists, printing, generic SEO services, and outbound SaaS: **$0** from this authorization.
 
-- If providers reply but do not distribute: print high-quality referral cards / physically visit local practices.
-- If provider outreach is weak: use the budget to acquire a fresh, tightly targeted second batch rather than buying a bulk-send platform.
-- If the comparator converts to app clicks: put a small test budget behind high-intent search traffic to that tool and stop quickly if cost per qualified click is poor.
-
-Do not spend the budget on more product features or bulk commodity SEO. Use the on-demand content generator only for genuinely useful pages that support the search loop.
+Measure qualified acquisition through `baseline_complete` (primary activation outcome) and `subscription_started` (terminal economic outcome). App Store clicks and impressions are diagnostics, not success criteria. Before spending, verify that the web-to-iOS attribution bridge is functioning and that each proposed experiment has its own cap and stop rules.
 
 ## Email operator / reply agent
 
