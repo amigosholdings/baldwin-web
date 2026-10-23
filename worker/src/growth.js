@@ -21,7 +21,7 @@ export async function recordGrowthEvent(env,body){
   if(event==='attributed_install'||event==='attributed_open'){
     if(installKey){const row=await remember(env,{key:installKey,userId:null,installationId,anonymousId,providerCode:effectiveProvider,source,campaign,eventName:event});effectiveProvider=row?.provider_code||null;effectiveSource=row?.source||source;effectiveCampaign=row?.campaign||campaign}
   }else if(event==='referral_view'||event==='download_click'||event==='provider_offer_redirect'||event==='app_store_redirect'){
-    if(anonKey&&effectiveProvider){const row=await remember(env,{key:anonKey,userId:null,installationId:null,anonymousId,providerCode:effectiveProvider,source,campaign,eventName:event});effectiveProvider=row?.provider_code||effectiveProvider;effectiveSource=row?.source||source;effectiveCampaign=row?.campaign||campaign}
+    if(anonKey&&(effectiveProvider||source||campaign)){const row=await remember(env,{key:anonKey,userId:null,installationId:null,anonymousId,providerCode:effectiveProvider,source,campaign,eventName:event});effectiveProvider=row?.provider_code||effectiveProvider;effectiveSource=row?.source||source;effectiveCampaign=row?.campaign||campaign}
   }
   if(event==='app_signup'&&userKey){
     let seed=installKey?await attribution(env,installKey):null;if(!seed&&anonKey)seed=await attribution(env,anonKey);
