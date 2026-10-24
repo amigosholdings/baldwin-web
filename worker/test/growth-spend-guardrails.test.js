@@ -13,19 +13,16 @@ function makeEnv() {
   raw.exec(readFileSync(new URL('../migration-v6.sql', import.meta.url), 'utf8'));
   const DB = {
     prepare(sql) {
-      return {
-        bind(...args) {
-          const statement = raw.prepare(sql);
-          return {
-            async first() { return statement.get(...args) ?? null; },
-            async all() { return { results: statement.all(...args) }; },
-            async run() {
-              const result = statement.run(...args);
-              return { meta: { changes: Number(result.changes) } };
-            },
-          };
+      const statement = raw.prepare(sql);
+      const bound = (args) => ({
+        async first() { return statement.get(...args) ?? null; },
+        async all() { return { results: statement.all(...args) }; },
+        async run() {
+          const result = statement.run(...args);
+          return { meta: { changes: Number(result.changes) } };
         },
-      };
+      });
+      return { ...bound([]), bind(...args) { return bound(args); } };
     },
   };
   return { DB, raw };
