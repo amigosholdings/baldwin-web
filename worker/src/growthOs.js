@@ -1,3 +1,6 @@
+const ACQUISITION_BUDGET_ID = 'consumer-acquisition-2026-09-22';
+const ACQUISITION_CAP_CENTS = 20000;
+
 function clean(value, max = 2000) {
   return String(value ?? '').trim().slice(0, max);
 }
@@ -17,13 +20,14 @@ async function requireSchema(env) {
 }
 
 async function budgetSnapshot(env) {
+  // Never select a newer authorization or silently expand the $200 acquisition cap.
   const row = await env.DB.prepare(`
     SELECT b.*,
       COALESCE((SELECT SUM(s.amount_cents) FROM growth_spend_ledger s WHERE s.budget_authorization_id=b.id),0) AS spent_cents
     FROM growth_budget_authorizations b
-    WHERE b.status='active'
-    ORDER BY b.created_at DESC LIMIT 1
-  `).first();
+    WHERE b.id=? AND b.status='active' AND b.authorized_cents BETWEEN 0 AND ?
+    LIMIT 1
+  `).bind(ACQUISITION_BUDGET_ID, ACQUISITION_CAP_CENTS).first();
   if (!row) return null;
   return { ...row, remaining_cents: Math.max(0, Number(row.authorized_cents || 0) - Number(row.spent_cents || 0)) };
 }
@@ -116,21 +120,35 @@ async function addCommunityTopics(env, body) {
 }
 
 async function recordSpend(env, body) {
-  const budget=await budgetSnapshot(env); if(!budget) throw new Error('no_active_budget_authorization');
-  const amount=Math.trunc(Number(body.amount_cents||0)); if(!Number.isFinite(amount)||amount<=0) throw new Error('positive_amount_cents_required');
-  if(amount>Number(budget.remaining_cents||0)) throw new Error('aggregate_budget_cap_exceeded');
-  const experimentId=clean(body.experiment_id,80)||null;
-  if(experimentId){
-    const exp=await env.DB.prepare(`SELECT e.*,COALESCE((SELECT SUM(amount_cents) FROM growth_spend_ledger WHERE experiment_id=e.id),0) AS spent_cents FROM growth_experiments e WHERE e.id=? LIMIT 1`).bind(experimentId).first();
-    if(!exp) throw new Error('experiment_not_found');
-    if(Number(exp.spent_cents||0)+amount>Number(exp.spend_cap_cents||0)) throw new Error('experiment_spend_cap_exceeded');
-  }
-  const id=uuid();
-  await env.DB.prepare(`
-    INSERT INTO growth_spend_ledger(id,budget_authorization_id,experiment_id,channel,amount_cents,vendor,external_reference,memo)
-    VALUES(?,?,?,?,?,?,?,?)
-  `).bind(id,budget.id,experimentId,clean(body.channel,40),amount,clean(body.vendor,160),clean(body.external_reference,240)||null,clean(body.memo,1000)).run();
-  return {ok:true,id,remaining_cents:Number(budget.remaining_cents||0)-amount};
+  const amount = Math.trunc(Number(body.amount_cents || 0));
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('positive_amount_cents_required');
+  const experimentId = clean(body.experiment_id, 80);
+  if (!experimentId) throw new Error('experiment_id_required');
+
+  // The cap checks and ledger insertion MUST be one SQLite write statement.
+  // This rejects missing/mismatched experiments, overspend, and unauthorized
+  // budget rows without a read-check-write race.
+  const id = uuid();
+  const result = await env.DB.prepare(`
+    INSERT INTO growth_spend_ledger
+      (id,budget_authorization_id,experiment_id,channel,amount_cents,vendor,external_reference,memo)
+    SELECT ?,b.id,e.id,?,?,?,?,?
+    FROM growth_budget_authorizations b
+    JOIN growth_experiments e ON e.budget_authorization_id=b.id
+    WHERE b.id=? AND b.status='active' AND b.authorized_cents BETWEEN 0 AND ?
+      AND e.id=?
+      AND (SELECT COALESCE(SUM(s.amount_cents),0) FROM growth_spend_ledger s
+           WHERE s.experiment_id=e.id) + ? <= e.spend_cap_cents
+      AND (SELECT COALESCE(SUM(s.amount_cents),0) FROM growth_spend_ledger s
+           WHERE s.budget_authorization_id=b.id) + ? <= b.authorized_cents
+  `).bind(
+    id, clean(body.channel,40), amount, clean(body.vendor,160),
+    clean(body.external_reference,240)||null, clean(body.memo,1000),
+    ACQUISITION_BUDGET_ID, ACQUISITION_CAP_CENTS, experimentId, amount, amount
+  ).run();
+  if (Number(result.meta?.changes || 0) !== 1) throw new Error('spend_rejected_by_budget_guardrails');
+  const budget = await budgetSnapshot(env);
+  return { ok:true, id, remaining_cents:budget?.remaining_cents ?? 0 };
 }
 
 async function upsertMetrics(env, body) {
