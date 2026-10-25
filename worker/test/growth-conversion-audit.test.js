@@ -52,7 +52,7 @@ test('mature signup cohorts count unique users and outcomes within seven days', 
 test('coverage flags conversion events without a linked user, without returning identities', () => {
   const { db, coverageSql } = auditFixture();
   const rows = db.prepare(coverageSql).all();
-  assert.deepEqual(rows, [{
+  assert.deepEqual(rows.map(row => ({ ...row })), [{
     event_name: 'subscription_started',
     event_rows_7d: 1,
     rows_with_user_id: 0,
