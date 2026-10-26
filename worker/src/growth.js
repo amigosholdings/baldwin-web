@@ -24,7 +24,13 @@ export async function recordGrowthEvent(env,body){
     if(anonKey&&(effectiveProvider||source||campaign)){const row=await remember(env,{key:anonKey,userId:null,installationId:null,anonymousId,providerCode:effectiveProvider,source,campaign,eventName:event});effectiveProvider=row?.provider_code||effectiveProvider;effectiveSource=row?.source||source;effectiveCampaign=row?.campaign||campaign}
   }
   if(event==='app_signup'&&userKey){
-    let seed=installKey?await attribution(env,installKey):null;if(!seed&&anonKey)seed=await attribution(env,anonKey);
+    let seed=installKey?await attribution(env,installKey):null;
+    // An install/open event can create an empty install record before the
+    // anonymous web campaign is linked. Do not let that placeholder shadow
+    // a meaningful first touch from the same anonymous identifier.
+    if((!seed||!(seed.provider_code||seed.source||seed.campaign))&&anonKey){
+      seed=await attribution(env,anonKey)||seed;
+    }
     const row=await remember(env,{key:userKey,userId,installationId,anonymousId,providerCode:seed?.provider_code||effectiveProvider,source:seed?.source||source,campaign:seed?.campaign||campaign,eventName:event});
     effectiveProvider=row?.provider_code||null;effectiveSource=row?.source||source;effectiveCampaign=row?.campaign||campaign;
   }else if(CONVERSIONS.has(event)&&userKey){

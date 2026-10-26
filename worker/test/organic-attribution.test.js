@@ -79,3 +79,47 @@ test('unattributed anonymous handoff is not persisted', async () => {
   await recordGrowthEvent(env, { event: 'download_click', anonymousId: 'unattributed-visit' });
   assert.equal(env.subjects.has('anon:unattributed-visit'), false);
 });
+
+test('anonymous organic attribution survives a blank install placeholder', async () => {
+  const env = makeEnv();
+  await recordGrowthEvent(env, {
+    event: 'download_click', anonymousId: 'visitor-bridge',
+    source: 'trackmyhairloss', campaign: 'photo_guide',
+  });
+  await recordGrowthEvent(env, {
+    event: 'attributed_install', installationId: 'install-bridge',
+  });
+  assert.equal(env.subjects.get('install:install-bridge')?.source, null);
+
+  await recordGrowthEvent(env, {
+    event: 'app_signup', userId: 'user-bridge',
+    installationId: 'install-bridge', anonymousId: 'visitor-bridge',
+  });
+  await recordGrowthEvent(env, { event: 'baseline_complete', userId: 'user-bridge' });
+  await recordGrowthEvent(env, { event: 'subscription_started', userId: 'user-bridge' });
+
+  for (const event of env.events.filter(e =>
+    ['app_signup', 'baseline_complete', 'subscription_started'].includes(e.event_name))) {
+    assert.equal(event.source, 'trackmyhairloss');
+    assert.equal(event.campaign, 'photo_guide');
+  }
+});
+
+test('meaningfully attributed installation retains precedence over anonymous source', async () => {
+  const env = makeEnv();
+  await recordGrowthEvent(env, {
+    event: 'download_click', anonymousId: 'visitor-priority',
+    source: 'trackmyhairloss', campaign: 'web',
+  });
+  await recordGrowthEvent(env, {
+    event: 'attributed_install', installationId: 'install-priority',
+    source: 'apple_search', campaign: 'install',
+  });
+  await recordGrowthEvent(env, {
+    event: 'app_signup', userId: 'user-priority',
+    installationId: 'install-priority', anonymousId: 'visitor-priority',
+  });
+  await recordGrowthEvent(env, { event: 'baseline_complete', userId: 'user-priority' });
+  assert.equal(env.subjects.get('user:user-priority')?.source, 'apple_search');
+  assert.equal(env.events.at(-1)?.campaign, 'install');
+});
