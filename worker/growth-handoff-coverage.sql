@@ -1,7 +1,7 @@
 -- Read-only, aggregate diagnostic of signup attribution handoff, not conversion.
 -- First signup per user in the last 7 days; no identifiers or health data returned.
 -- Anonymous ID absence is NOT proof of a lost web-to-app visit: users may arrive directly.
--- A known first-touch record with missing signup attribution is a definite linkage defect.
+-- Only first touches recorded no later than signup count as linkage-defect candidates.
 WITH ranked_signups AS (
   SELECT user_id, anonymous_id, installation_id, source, campaign, provider_code, created_at,
          ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at, id) AS rn
@@ -19,16 +19,19 @@ flags AS (
     EXISTS (
       SELECT 1 FROM attribution_subjects a
       WHERE a.subject_key = 'anon:' || s.anonymous_id
+        AND datetime(a.created_at) <= datetime(s.created_at)
         AND (TRIM(COALESCE(a.source,'')) <> '' OR TRIM(COALESCE(a.campaign,'')) <> ''
              OR TRIM(COALESCE(a.provider_code,'')) <> '')
     ) AS anonymous_first_touch,
     EXISTS (
       SELECT 1 FROM attribution_subjects a
       WHERE a.subject_key = 'install:' || s.installation_id
+        AND datetime(a.created_at) <= datetime(s.created_at)
     ) AS installation_record,
     EXISTS (
       SELECT 1 FROM attribution_subjects a
       WHERE a.subject_key = 'install:' || s.installation_id
+        AND datetime(a.created_at) <= datetime(s.created_at)
         AND (TRIM(COALESCE(a.source,'')) <> '' OR TRIM(COALESCE(a.campaign,'')) <> ''
              OR TRIM(COALESCE(a.provider_code,'')) <> '')
     ) AS installation_first_touch
