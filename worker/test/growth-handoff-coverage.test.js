@@ -10,14 +10,14 @@ function fixture() {
       user_id TEXT, anonymous_id TEXT, installation_id TEXT, source TEXT,
       campaign TEXT, provider_code TEXT, created_at TEXT NOT NULL);
     CREATE TABLE attribution_subjects (subject_key TEXT PRIMARY KEY,
-      source TEXT, campaign TEXT, provider_code TEXT);
+      source TEXT, campaign TEXT, provider_code TEXT, created_at TEXT NOT NULL);
     INSERT INTO attribution_subjects VALUES
-      ('anon:anon-a','trackmyhairloss','photo_guide',NULL),
-      ('install:install-a',NULL,NULL,NULL),
-      ('anon:anon-b','trackmyhairloss','photo_guide',NULL),
-      ('install:install-b',NULL,NULL,NULL),
-      ('install:install-c',NULL,NULL,NULL),
-      ('install:install-d','apple_search','search',NULL);
+      ('anon:anon-a','trackmyhairloss','photo_guide',NULL,datetime('now','-5 days')),
+      ('install:install-a',NULL,NULL,NULL,datetime('now','-5 days')),
+      ('anon:anon-b','trackmyhairloss','photo_guide',NULL,datetime('now','-5 days')),
+      ('install:install-b',NULL,NULL,NULL,datetime('now','-5 days')),
+      ('install:install-c',NULL,NULL,NULL,datetime('now','-5 days')),
+      ('install:install-d','apple_search','search',NULL,datetime('now','-5 days'));
     INSERT INTO events VALUES
       ('a','app_signup','user-a','anon-a','install-a',NULL,NULL,NULL,datetime('now','-1 day')),
       ('b','app_signup','user-b','anon-b','install-b','trackmyhairloss','photo_guide',NULL,datetime('now','-2 days')),
