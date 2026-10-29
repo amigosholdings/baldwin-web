@@ -48,7 +48,8 @@ test('article App Store handoff forwards existing anonymous ID and preserves cam
   assert.equal(events[1].event, 'blog_cta_click');
   assert.equal(events[1].anonymousId, 'synthetic-visitor-123');
   assert.equal(events[1].metadata.page, '/blog/synthetic-article');
-  assert.equal(events[1].metadata.href, download.href);
+  assert.equal(events[1].metadata.href, 'https://getbaldwin.app/download?c=tmhl_content');
+  assert.ok(!events[1].metadata.href.includes('aid='), 'anonymous ID must not leak into analytics metadata');
   assert.ok(events.every(e => !Object.hasOwn(e, 'userId')), 'no personal health data is collected');
 });
 
