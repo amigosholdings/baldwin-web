@@ -24,7 +24,10 @@ export async function onRequest(context){
   const {request,env}=context;
   if(request.method!=='GET'&&request.method!=='HEAD')return new Response('Method Not Allowed',{status:405,headers:{Allow:'GET, HEAD'}});
   const url=new URL(request.url),ref=providerCode(url.searchParams.get('ref')),anonymousId=opaque(url.searchParams.get('aid'));
-  const source=clean(url.searchParams.get('utm_source')||'getbaldwin',80),campaign=clean(url.searchParams.get('utm_campaign')||url.searchParams.get('c')||'download',120);
+  // Article download CTAs use c=tmhl_content but may omit utm_source. Preserve
+  // their actual acquisition source rather than misclassifying them as Baldwin.
+  // An explicit utm_source always takes precedence.
+  const source=clean(url.searchParams.get('utm_source')||(url.searchParams.get('c')==='tmhl_content'?'trackmyhairloss':'getbaldwin'),80),campaign=clean(url.searchParams.get('utm_campaign')||url.searchParams.get('c')||'download',120);
   const rid=opaque(url.searchParams.get('rid'))||crypto.randomUUID();
   const provider=await lookupProvider(env,ref);
   const effectiveRef=provider?ref:null,isProviderTraffic=Boolean(provider)&&(source==='trybaldwin'||campaign==='provider_referral'),appleCampaign=campaignFor(env,isProviderTraffic);
