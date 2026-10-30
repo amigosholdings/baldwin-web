@@ -48,3 +48,50 @@ test('unknown provider fails open to ordinary App Store campaign',async()=>{
   try{const response=await onRequest({request:new Request('https://getbaldwin.app/download?ref=unknown&utm_source=trybaldwin&utm_campaign=provider_referral'),env:{APP_STORE_PROVIDER_TOKEN:'123456',APP_STORE_PROVIDER_CAMPAIGN_TOKEN:'provider_referral',APP_STORE_WEBSITE_CAMPAIGN_TOKEN:'website'},waitUntil:()=>{}});assert.equal(response.status,302);assert.match(response.headers.get('location'),/id6760326527/);assert.match(response.headers.get('location'),/ct=website/);}
   finally{globalThis.fetch=originalFetch}
 });
+
+
+test('content download without utm_source records TrackMyHairLoss as source',async()=>{
+  const originalFetch=globalThis.fetch,events=[];
+  globalThis.fetch=async(_url,init={})=>{
+    if(init.body)events.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({ok:true}),{status:201,headers:{'content-type':'application/json'}});
+  };
+  try{
+    const waits=[];
+    const response=await onRequest({
+      request:new Request('https://getbaldwin.app/download?c=tmhl_content&aid=synthetic-content-visitor'),
+      env:{},
+      waitUntil:p=>waits.push(p)
+    });
+    await Promise.all(waits);
+    assert.equal(response.status,302);
+    const redirect=events.find(e=>e.event==='app_store_redirect');
+    assert.ok(redirect,'App Store handoff must be recorded');
+    assert.equal(redirect.anonymousId,'synthetic-content-visitor');
+    assert.equal(redirect.source,'trackmyhairloss');
+    assert.equal(redirect.campaign,'tmhl_content');
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('content source fallback preserves explicit source and other campaign defaults',async()=>{
+  const originalFetch=globalThis.fetch,events=[];
+  globalThis.fetch=async(_url,init={})=>{
+    if(init.body)events.push(JSON.parse(init.body));
+    return new Response('{}',{status:201});
+  };
+  try{
+    const urls=[
+      'https://getbaldwin.app/download?c=tmhl_content&utm_source=approved_partner',
+      'https://getbaldwin.app/download?c=website'
+    ];
+    for(const url of urls){
+      const waits=[];
+      await onRequest({request:new Request(url),env:{},waitUntil:p=>waits.push(p)});
+      await Promise.all(waits);
+    }
+    assert.equal(events[0].source,'approved_partner');
+    assert.equal(events[0].campaign,'tmhl_content');
+    assert.equal(events[1].source,'getbaldwin');
+    assert.equal(events[1].campaign,'website');
+  }finally{globalThis.fetch=originalFetch}
+});
