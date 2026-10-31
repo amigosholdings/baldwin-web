@@ -73,25 +73,32 @@ test('content download without utm_source records TrackMyHairLoss as source',asy
   }finally{globalThis.fetch=originalFetch}
 });
 
-test('content source fallback preserves explicit source and other campaign defaults',async()=>{
+test('all TrackMyHairLoss placements classify correctly without client-side UTM decoration',async()=>{
   const originalFetch=globalThis.fetch,events=[];
   globalThis.fetch=async(_url,init={})=>{
     if(init.body)events.push(JSON.parse(init.body));
     return new Response('{}',{status:201});
   };
   try{
-    const urls=[
-      'https://getbaldwin.app/download?c=tmhl_content&utm_source=approved_partner',
-      'https://getbaldwin.app/download?c=website'
+    const cases=[
+      ['https://getbaldwin.app/download?c=tmhl_home','trackmyhairloss','tmhl_home'],
+      ['https://getbaldwin.app/download?c=tmhl_nav','trackmyhairloss','tmhl_nav'],
+      ['https://getbaldwin.app/download?c=tmhl_content&utm_source=approved_partner','approved_partner','tmhl_content'],
+      ['https://getbaldwin.app/download?c=tmhl_home&utm_campaign=homepage_test','trackmyhairloss','homepage_test'],
+      ['https://getbaldwin.app/download?c=website','getbaldwin','website'],
+      ['https://getbaldwin.app/download?c=tmhl','getbaldwin','tmhl'],
+      ['https://getbaldwin.app/download?c=tmhl_%2Fmalformed','getbaldwin','tmhl_/malformed']
     ];
-    for(const url of urls){
+    for(const [url] of cases){
       const waits=[];
-      await onRequest({request:new Request(url),env:{},waitUntil:p=>waits.push(p)});
+      const response=await onRequest({request:new Request(url),env:{},waitUntil:p=>waits.push(p)});
       await Promise.all(waits);
+      assert.equal(response.status,302);
     }
-    assert.equal(events[0].source,'approved_partner');
-    assert.equal(events[0].campaign,'tmhl_content');
-    assert.equal(events[1].source,'getbaldwin');
-    assert.equal(events[1].campaign,'website');
+    assert.equal(events.length,cases.length);
+    for(let i=0;i<cases.length;i++){
+      assert.equal(events[i].source,cases[i][1],cases[i][0]);
+      assert.equal(events[i].campaign,cases[i][2],cases[i][0]);
+    }
   }finally{globalThis.fetch=originalFetch}
 });
