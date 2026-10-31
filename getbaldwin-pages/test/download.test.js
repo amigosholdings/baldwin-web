@@ -48,3 +48,57 @@ test('unknown provider fails open to ordinary App Store campaign',async()=>{
   try{const response=await onRequest({request:new Request('https://getbaldwin.app/download?ref=unknown&utm_source=trybaldwin&utm_campaign=provider_referral'),env:{APP_STORE_PROVIDER_TOKEN:'123456',APP_STORE_PROVIDER_CAMPAIGN_TOKEN:'provider_referral',APP_STORE_WEBSITE_CAMPAIGN_TOKEN:'website'},waitUntil:()=>{}});assert.equal(response.status,302);assert.match(response.headers.get('location'),/id6760326527/);assert.match(response.headers.get('location'),/ct=website/);}
   finally{globalThis.fetch=originalFetch}
 });
+
+
+test('content download without utm_source records TrackMyHairLoss as source',async()=>{
+  const originalFetch=globalThis.fetch,events=[];
+  globalThis.fetch=async(_url,init={})=>{
+    if(init.body)events.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({ok:true}),{status:201,headers:{'content-type':'application/json'}});
+  };
+  try{
+    const waits=[];
+    const response=await onRequest({
+      request:new Request('https://getbaldwin.app/download?c=tmhl_content&aid=synthetic-content-visitor'),
+      env:{},
+      waitUntil:p=>waits.push(p)
+    });
+    await Promise.all(waits);
+    assert.equal(response.status,302);
+    const redirect=events.find(e=>e.event==='app_store_redirect');
+    assert.ok(redirect,'App Store handoff must be recorded');
+    assert.equal(redirect.anonymousId,'synthetic-content-visitor');
+    assert.equal(redirect.source,'trackmyhairloss');
+    assert.equal(redirect.campaign,'tmhl_content');
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('all TrackMyHairLoss placements classify correctly without client-side UTM decoration',async()=>{
+  const originalFetch=globalThis.fetch,events=[];
+  globalThis.fetch=async(_url,init={})=>{
+    if(init.body)events.push(JSON.parse(init.body));
+    return new Response('{}',{status:201});
+  };
+  try{
+    const cases=[
+      ['https://getbaldwin.app/download?c=tmhl_home','trackmyhairloss','tmhl_home'],
+      ['https://getbaldwin.app/download?c=tmhl_nav','trackmyhairloss','tmhl_nav'],
+      ['https://getbaldwin.app/download?c=tmhl_content&utm_source=approved_partner','approved_partner','tmhl_content'],
+      ['https://getbaldwin.app/download?c=tmhl_home&utm_campaign=homepage_test','trackmyhairloss','homepage_test'],
+      ['https://getbaldwin.app/download?c=website','getbaldwin','website'],
+      ['https://getbaldwin.app/download?c=tmhl','getbaldwin','tmhl'],
+      ['https://getbaldwin.app/download?c=tmhl_%2Fmalformed','getbaldwin','tmhl_/malformed']
+    ];
+    for(const [url] of cases){
+      const waits=[];
+      const response=await onRequest({request:new Request(url),env:{},waitUntil:p=>waits.push(p)});
+      await Promise.all(waits);
+      assert.equal(response.status,302);
+    }
+    assert.equal(events.length,cases.length);
+    for(let i=0;i<cases.length;i++){
+      assert.equal(events[i].source,cases[i][1],cases[i][0]);
+      assert.equal(events[i].campaign,cases[i][2],cases[i][0]);
+    }
+  }finally{globalThis.fetch=originalFetch}
+});
