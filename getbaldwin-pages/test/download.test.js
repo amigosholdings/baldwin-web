@@ -102,3 +102,30 @@ test('all TrackMyHairLoss placements classify correctly without client-side UTM 
     }
   }finally{globalThis.fetch=originalFetch}
 });
+
+test('tracked App Store redirects disable caching and cross-site referrers',async()=>{
+  const originalFetch=globalThis.fetch,events=[];
+  globalThis.fetch=async(url,init={})=>{
+    if(String(url).includes('/v1/providers/'))return new Response(JSON.stringify({code:'clinic-a',appleOfferCode:'CLINICA50'}),{status:200,headers:{'content-type':'application/json'}});
+    if(init.body)events.push(JSON.parse(init.body));
+    return new Response('{}',{status:201});
+  };
+  try{
+    const cases=[
+      ['https://getbaldwin.app/download?c=tmhl_content&aid=synthetic-private-id','GET',/apps\\.apple\\.com\\/us\\/app/],
+      ['https://getbaldwin.app/download?ref=clinic-a&utm_source=trybaldwin&utm_campaign=provider_referral&aid=synthetic-private-id','GET',/apps\\.apple\\.com\\/redeem/],
+      ['https://getbaldwin.app/download?c=tmhl_home&aid=synthetic-private-id','HEAD',/apps\\.apple\\.com\\/us\\/app/]
+    ];
+    for(const [url,method,destination] of cases){
+      const waits=[];
+      const response=await onRequest({request:new Request(url,{method}),env:{},waitUntil:p=>waits.push(p)});
+      await Promise.all(waits);
+      assert.equal(response.status,302);
+      assert.match(response.headers.get('location'),destination);
+      assert.equal(response.headers.get('cache-control'),'no-store');
+      assert.equal(response.headers.get('referrer-policy'),'no-referrer');
+      assert.doesNotMatch(response.headers.get('location'),/synthetic-private-id/);
+    }
+    assert.equal(events.filter(e=>e.event==='app_store_redirect').length,2,'HEAD must not count as a conversion handoff');
+  }finally{globalThis.fetch=originalFetch}
+});
