@@ -20,11 +20,18 @@ async function lookupProvider(env,code){if(!code)return null;try{const r=await a
 async function record(env,payload){try{await apiFetch(env,'/v1/events',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})}catch{}}
 function campaignFor(env,isProviderTraffic){return isProviderTraffic?appleCampaignToken(env.APP_STORE_PROVIDER_CAMPAIGN_TOKEN):appleCampaignToken(env.APP_STORE_WEBSITE_CAMPAIGN_TOKEN)}
 function isLikelyBot(request){return /bot|crawler|spider|preview|facebookexternalhit|twitterbot|slackbot|discordbot|whatsapp/i.test(request.headers.get('user-agent')||'')}
+// A tracked 302 must not be cached or disclose the anonymous acquisition ID
+// to the external App Store through the browser's Referer header.
+function safeAppleRedirect(destination){return new Response(null,{status:302,headers:{Location:destination,'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}})}
 export async function onRequest(context){
   const {request,env}=context;
   if(request.method!=='GET'&&request.method!=='HEAD')return new Response('Method Not Allowed',{status:405,headers:{Allow:'GET, HEAD'}});
   const url=new URL(request.url),ref=providerCode(url.searchParams.get('ref')),anonymousId=opaque(url.searchParams.get('aid'));
-  const source=clean(url.searchParams.get('utm_source')||'getbaldwin',80),campaign=clean(url.searchParams.get('utm_campaign')||url.searchParams.get('c')||'download',120);
+  // TrackMyHairLoss homepage, nav and article CTAs can omit utm_source when
+  // client-side link decoration is unavailable. Infer source only from their
+  // namespaced campaign; explicit utm_source always takes precedence.
+  const placement=url.searchParams.get('c')||'';
+  const source=clean(url.searchParams.get('utm_source')||(/^tmhl_[a-z0-9_-]{1,80}$/i.test(placement)?'trackmyhairloss':'getbaldwin'),80),campaign=clean(url.searchParams.get('utm_campaign')||placement||'download',120);
   const rid=opaque(url.searchParams.get('rid'))||crypto.randomUUID();
   const provider=await lookupProvider(env,ref);
   const effectiveRef=provider?ref:null,isProviderTraffic=Boolean(provider)&&(source==='trybaldwin'||campaign==='provider_referral'),appleCampaign=campaignFor(env,isProviderTraffic);
@@ -33,8 +40,8 @@ export async function onRequest(context){
   if(shouldTrack)context.waitUntil(record(env,{event:'app_store_redirect',providerCode:effectiveRef,anonymousId,source,campaign,idempotencyKey:`app_store_redirect:${rid}`,metadata:{destination,placement:clean(url.searchParams.get('c'),80),apple_campaign:appleCampaign||null,apple_campaign_enabled:Boolean(appleProviderToken(env.APP_STORE_PROVIDER_TOKEN)&&appleCampaign)}}));
   if(provider&&offerCode(provider.appleOfferCode)){
     if(shouldTrack)context.waitUntil(record(env,{event:'provider_offer_redirect',providerCode:ref,anonymousId,source,campaign,idempotencyKey:`provider_offer_redirect:${rid}`,metadata:{offer_variant:clean(provider.offerVariant||'provider_50_two_months',80),apple_campaign:appleCampaign||null}}));
-    return Response.redirect(redemptionUrl(offerCode(provider.appleOfferCode),env,appleCampaign),302);
+    return safeAppleRedirect(redemptionUrl(offerCode(provider.appleOfferCode),env,appleCampaign));
   }
-  return Response.redirect(appStoreUrl(env,appleCampaign),302);
+  return safeAppleRedirect(appStoreUrl(env,appleCampaign));
 }
 export {appStoreUrl,appleCampaignToken,appleProviderToken,offerCode,opaque,providerCode,redemptionUrl,withAppleCampaign};
