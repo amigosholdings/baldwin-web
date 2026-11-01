@@ -112,16 +112,18 @@ test('tracked App Store redirects disable caching and cross-site referrers',asyn
   };
   try{
     const cases=[
-      ['https://getbaldwin.app/download?c=tmhl_content&aid=synthetic-private-id','GET',/apps\\.apple\\.com\\/us\\/app/],
-      ['https://getbaldwin.app/download?ref=clinic-a&utm_source=trybaldwin&utm_campaign=provider_referral&aid=synthetic-private-id','GET',/apps\\.apple\\.com\\/redeem/],
-      ['https://getbaldwin.app/download?c=tmhl_home&aid=synthetic-private-id','HEAD',/apps\\.apple\\.com\\/us\\/app/]
+      ['https://getbaldwin.app/download?c=tmhl_content&aid=synthetic-private-id','GET','/us/app/'],
+      ['https://getbaldwin.app/download?ref=clinic-a&utm_source=trybaldwin&utm_campaign=provider_referral&aid=synthetic-private-id','GET','/redeem'],
+      ['https://getbaldwin.app/download?c=tmhl_home&aid=synthetic-private-id','HEAD','/us/app/']
     ];
     for(const [url,method,destination] of cases){
       const waits=[];
       const response=await onRequest({request:new Request(url,{method}),env:{},waitUntil:p=>waits.push(p)});
       await Promise.all(waits);
       assert.equal(response.status,302);
-      assert.match(response.headers.get('location'),destination);
+      const appleUrl=new URL(response.headers.get('location'));
+      assert.equal(appleUrl.hostname,'apps.apple.com');
+      assert.ok(appleUrl.pathname.startsWith(destination));
       assert.equal(response.headers.get('cache-control'),'no-store');
       assert.equal(response.headers.get('referrer-policy'),'no-referrer');
       assert.doesNotMatch(response.headers.get('location'),/synthetic-private-id/);
