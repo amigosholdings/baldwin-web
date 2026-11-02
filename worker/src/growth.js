@@ -11,7 +11,26 @@ function opaque(v,max=180){if(typeof v!=='string')return null;const s=v.trim();r
 export function sanitizeGrowthMetadata(input){if(!input||typeof input!=='object'||Array.isArray(input))return{};const out={};for(const [rawKey,rawValue] of Object.entries(input).slice(0,20)){const key=String(rawKey).replace(/[^A-Za-z0-9_.-]/g,'_').slice(0,50);if(!key||SENSITIVE_KEY.test(key))continue;if(rawValue===null||typeof rawValue==='boolean')out[key]=rawValue;else if(typeof rawValue==='number'&&Number.isFinite(rawValue))out[key]=rawValue;else if(typeof rawValue==='string')out[key]=rawValue.slice(0,120)}return out}
 export async function activeProvider(env,rawCode){const code=normalizeProviderCode(rawCode);if(!code)return null;const row=await env.DB.prepare(`SELECT id,code,name,website,city,state,status,apple_offer_code,offer_variant,offer_provision_status,offer_provision_error,offer_provisioned_at FROM providers WHERE code=? AND status IN ('pilot','active') LIMIT 1`).bind(code).first();if(!row)return null;return{...row,appleOfferCode:normalizeAppleOfferCode(row.apple_offer_code),offerVariant:clean(row.offer_variant,80)||null,offerProvisionStatus:clean(row.offer_provision_status,40)||'unconfigured',offerProvisionError:clean(row.offer_provision_error,500)||null,offerProvisionedAt:clean(row.offer_provisioned_at,80)||null}}
 async function attribution(env,key){if(!key)return null;return env.DB.prepare('SELECT * FROM attribution_subjects WHERE subject_key=? LIMIT 1').bind(key).first()}
-async function remember(env,{key,userId,installationId,anonymousId,providerCode,source,campaign,eventName}){if(!key)return null;const existing=await attribution(env,key);if(existing)return existing;const now=new Date().toISOString();await env.DB.prepare(`INSERT OR IGNORE INTO attribution_subjects(subject_key,user_id,installation_id,anonymous_id,provider_code,source,campaign,first_event,created_at) VALUES(?,?,?,?,?,?,?,?,?)`).bind(key,userId,installationId,anonymousId,providerCode,source,campaign,eventName,now).run();return attribution(env,key)}
+async function remember(env,{key,userId,installationId,anonymousId,providerCode,source,campaign,eventName}){
+  if(!key)return null;
+  const existing=await attribution(env,key);
+  if(existing){
+    // The first meaningful touch wins. A blank install/open placeholder must not
+    // permanently discard attribution that arrives in a later install/open event.
+    if(!(existing.provider_code||existing.source||existing.campaign)&&(providerCode||source||campaign)){
+      await env.DB.prepare(`UPDATE attribution_subjects
+        SET provider_code=?,source=?,campaign=?
+        WHERE subject_key=? AND COALESCE(provider_code,'')=''
+          AND COALESCE(source,'')='' AND COALESCE(campaign,'')=''`
+      ).bind(providerCode,source,campaign,key).run();
+      return attribution(env,key);
+    }
+    return existing;
+  }
+  const now=new Date().toISOString();
+  await env.DB.prepare(`INSERT OR IGNORE INTO attribution_subjects(subject_key,user_id,installation_id,anonymous_id,provider_code,source,campaign,first_event,created_at) VALUES(?,?,?,?,?,?,?,?,?)`).bind(key,userId,installationId,anonymousId,providerCode,source,campaign,eventName,now).run();
+  return attribution(env,key);
+}
 export async function recordGrowthEvent(env,body){
   const event=clean(body?.event,80);if(!event||!GROWTH_EVENT_NAMES.has(event))return{status:400,body:{error:'invalid_event'}};
   const userId=opaque(body?.userId,128),installationId=opaque(body?.installationId,128),anonymousId=opaque(body?.anonymousId,128),source=clean(body?.source,80),campaign=clean(body?.campaign,120);
