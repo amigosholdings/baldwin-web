@@ -27,6 +27,15 @@ function makeEnv() {
                 }
                 return { meta: { changes: 0 } };
               }
+              if (sql.includes('UPDATE attribution_subjects')) {
+                const [provider_code, source, campaign, subject_key] = args;
+                const existing = subjects.get(subject_key);
+                if (existing && !(existing.provider_code || existing.source || existing.campaign)) {
+                  subjects.set(subject_key, { ...existing, provider_code, source, campaign });
+                  return { meta: { changes: 1 } };
+                }
+                return { meta: { changes: 0 } };
+              }
               if (sql.includes('INTO events(')) {
                 const [id, event_name, provider_code, anonymous_id, user_id,
                   source, campaign] = args;
@@ -78,4 +87,98 @@ test('unattributed anonymous handoff is not persisted', async () => {
   const env = makeEnv();
   await recordGrowthEvent(env, { event: 'download_click', anonymousId: 'unattributed-visit' });
   assert.equal(env.subjects.has('anon:unattributed-visit'), false);
+});
+
+test('anonymous organic attribution survives a blank install placeholder', async () => {
+  const env = makeEnv();
+  await recordGrowthEvent(env, {
+    event: 'download_click', anonymousId: 'visitor-bridge',
+    source: 'trackmyhairloss', campaign: 'photo_guide',
+  });
+  await recordGrowthEvent(env, {
+    event: 'attributed_install', installationId: 'install-bridge',
+  });
+  assert.equal(env.subjects.get('install:install-bridge')?.source, null);
+
+  await recordGrowthEvent(env, {
+    event: 'app_signup', userId: 'user-bridge',
+    installationId: 'install-bridge', anonymousId: 'visitor-bridge',
+  });
+  await recordGrowthEvent(env, { event: 'baseline_complete', userId: 'user-bridge' });
+  await recordGrowthEvent(env, { event: 'subscription_started', userId: 'user-bridge' });
+
+  for (const event of env.events.filter(e =>
+    ['app_signup', 'baseline_complete', 'subscription_started'].includes(e.event_name))) {
+    assert.equal(event.source, 'trackmyhairloss');
+    assert.equal(event.campaign, 'photo_guide');
+  }
+});
+
+test('meaningfully attributed installation retains precedence over anonymous source', async () => {
+  const env = makeEnv();
+  await recordGrowthEvent(env, {
+    event: 'download_click', anonymousId: 'visitor-priority',
+    source: 'trackmyhairloss', campaign: 'web',
+  });
+  await recordGrowthEvent(env, {
+    event: 'attributed_install', installationId: 'install-priority',
+    source: 'apple_search', campaign: 'install',
+  });
+  await recordGrowthEvent(env, {
+    event: 'app_signup', userId: 'user-priority',
+    installationId: 'install-priority', anonymousId: 'visitor-priority',
+  });
+  await recordGrowthEvent(env, { event: 'baseline_complete', userId: 'user-priority' });
+  assert.equal(env.subjects.get('user:user-priority')?.source, 'apple_search');
+  assert.equal(env.events.at(-1)?.campaign, 'install');
+});
+
+
+test('later attributed open enriches a blank install before signup and both conversions', async () => {
+  const env = makeEnv();
+  await recordGrowthEvent(env, {
+    event: 'attributed_install', installationId: 'install-late-source',
+  });
+  await recordGrowthEvent(env, {
+    event: 'attributed_open', installationId: 'install-late-source',
+    source: 'apple_search', campaign: 'search_results',
+  });
+  assert.equal(env.subjects.get('install:install-late-source')?.source, 'apple_search');
+
+  await recordGrowthEvent(env, {
+    event: 'app_signup', installationId: 'install-late-source', userId: 'user-late-source',
+  });
+  await recordGrowthEvent(env, { event: 'baseline_complete', userId: 'user-late-source' });
+  await recordGrowthEvent(env, { event: 'subscription_started', userId: 'user-late-source' });
+
+  for (const event of env.events.filter(e =>
+    ['app_signup', 'baseline_complete', 'subscription_started'].includes(e.event_name))) {
+    assert.equal(event.source, 'apple_search');
+    assert.equal(event.campaign, 'search_results');
+  }
+});
+
+test('a later attributed open never overwrites a meaningful install first touch', async () => {
+  const env = makeEnv();
+  await recordGrowthEvent(env, {
+    event: 'attributed_install', installationId: 'install-first-touch',
+    source: 'trackmyhairloss', campaign: 'photo_guide',
+  });
+  await recordGrowthEvent(env, {
+    event: 'attributed_open', installationId: 'install-first-touch',
+    source: 'apple_search', campaign: 'later_campaign',
+  });
+  await recordGrowthEvent(env, {
+    event: 'app_signup', installationId: 'install-first-touch', userId: 'user-first-touch',
+  });
+  await recordGrowthEvent(env, { event: 'baseline_complete', userId: 'user-first-touch' });
+  assert.equal(env.subjects.get('install:install-first-touch')?.source, 'trackmyhairloss');
+  assert.equal(env.events.at(-1)?.campaign, 'photo_guide');
+});
+
+test('blank install remains unattributed when no meaningful touch arrives', async () => {
+  const env = makeEnv();
+  await recordGrowthEvent(env, { event: 'attributed_install', installationId: 'install-no-source' });
+  await recordGrowthEvent(env, { event: 'attributed_open', installationId: 'install-no-source' });
+  assert.equal(env.subjects.get('install:install-no-source')?.source, null);
 });
